@@ -36,6 +36,8 @@ final class AudioIO {
     private(set) var info = "idle"
 
     var muted = false
+    /// Set while the Tester "simulated caller" streams synthetic speech, so real mic audio doesn't interleave.
+    var pauseMic = false
 
     /// True while model audio is still queued or playing.
     var isPlaying: Bool {
@@ -163,7 +165,7 @@ final class AudioIO {
         inputLevel = inputLevel * 0.6 + level * 0.4
         onLevels?(inputLevel, outputLevel)
 
-        guard !muted, let converter else { return }
+        guard !muted, !pauseMic, let converter else { return }
         // Simulator has no echo cancellation: don't feed the agent its own voice (plus a short tail).
         if halfDuplex {
             lock.lock(); let busy = CFAbsoluteTimeGetCurrent() < playbackEnd + 0.35; lock.unlock()

@@ -47,6 +47,18 @@ struct TesterPanel: View {
                         action("Restart onboarding", icon: "arrow.counterclockwise", enabled: true, destructive: true) { model.reset() }
                     }
 
+                    if model.voice.status == .live {
+                        section("Simulated caller (live call)") {
+                            Text("Speaks through the same audio path as the microphone.")
+                                .font(Typo.sans(13)).foregroundStyle(Theme.muted)
+                            ForEach(Self.callerLines, id: \.self) { line in
+                                action("“\(line)”", icon: "waveform", enabled: !model.voice.simulatingCaller) {
+                                    model.voice.simulateCaller(line)
+                                }
+                            }
+                        }
+                    }
+
                     section("Models") {
                         row("Voice", "\(model.voice.model) · \(model.voice.voice)", declined: false)
                         row("Captions", model.voice.transcriptionModel, declined: false)
@@ -88,6 +100,15 @@ struct TesterPanel: View {
             }
         }
     }
+
+    static let callerLines = [
+        "Hi! I'm Sam.",
+        "Honestly I need help keeping my inbox under control.",
+        "Wait, what would you do with my emails?",
+        "Okay, sure, I'll connect my Gmail.",
+        "Actually, call me Samuel.",
+        "Can we just finish over text instead?",
+    ]
 
     @ViewBuilder
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
