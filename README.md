@@ -4,6 +4,18 @@ A native iOS (SwiftUI) take on Persona's onboarding. A brand-new assistant gets 
 
 > Built for the Persona CTO trial by Ahmed Aymane Alexander El Jebari.
 
+## The flow
+
+1. **Name your assistant** in the chat (tap a suggestion or type one). The opening lines type themselves out like a chat model writing.
+2. **It calls you.** A full-screen incoming call with a haptic ring. Pick up, or decline and keep texting.
+3. **A real conversation.** By voice it learns what to call you and the first thing you'd like help with, in any order, reacting to what you say. A living orb shows who's talking; captions show exactly what the agent says.
+4. **Connect Gmail.** A secure button appears mid-call: a real Google sign-in that only confirms your address.
+5. **You're in.** A home screen built from what it learned, and a main chat. Anything it promised along the way (like an email draft) is waiting there.
+
+Hang up, go quiet, lose signal or say "just let me in" at any point: it carries on in chat with only what's missing.
+
+**Docs:** [Architecture](docs/ARCHITECTURE.md) · [Testing](docs/TESTING.md) · [Design](DESIGN.md) · [Privacy](PRIVACY.md)
+
 ## Try it (about two minutes)
 
 1. Open `PersonaOnboarding.xcodeproj` in **Xcode 26** or later.
@@ -11,6 +23,15 @@ A native iOS (SwiftUI) take on Persona's onboarding. A brand-new assistant gets 
    - create `PersonaOnboarding/Secrets.json` containing `{"OPENAI_API_KEY": "sk-..."}` (it's git-ignored), or
    - run the app, open **Tester tools** (slider icon, top right) and paste the key under **Models**.
 3. Pick an **iPhone** or the **Simulator** (iOS 18+) and press **Run**. On an iPhone, choose your own signing team (and a unique bundle ID if Xcode asks).
+
+No other dependencies: no CocoaPods, no Swift packages, no backend. The key needs access to these OpenAI models:
+
+| Used for | Model |
+|---|---|
+| The voice call | `gpt-realtime-2.1` (voice "marin") |
+| Live captions | `gpt-live-transcribe` |
+| Chat | `gpt-6-luna` (falls back to `gpt-5.4-mini`) |
+| Autopilot caller (tester tool) | `gpt-5.4-mini` + `gpt-4o-mini-tts` |
 
 Tips:
 
@@ -72,9 +93,9 @@ flowchart LR
 | Speaks French, Arabic, Spanish… | Replies in their language and stays in it on the call, even after English app notes (opening lines follow the device language) |
 | Calls back after a call ended | "Hey, it's Nova again!" and picks up where it left off |
 
-## Stress testing
+## Testing
 
-Four layers, from pure logic to the real app:
+Four layers, from pure logic to the real app (details and commands in [docs/TESTING.md](docs/TESTING.md)):
 
 1. **Unit tests** for the engine (24): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, injected markup (refused, never echoed), restored calls, language tracking, kept promises, call-back greetings, and more. Run `swift test`.
 2. **Chat stress test:** an LLM plays 12 difficult personas against the real engine and brain, the harness plays the app (declines, drops, Gmail taps), and a judge model grades each transcript. Run `OPENAI_API_KEY=… swift run stress`.
@@ -89,7 +110,25 @@ Latest results:
 
 ## Design
 
-"Midnight Glass": a living Metal orb with a face, editorial serif display type, hairline glass, and spring motion. See [DESIGN.md](DESIGN.md).
+"Midnight Glass": a living Metal orb with a face, editorial serif display type, hairline glass, and spring motion. The orb is a dark glass sphere (so its white eyes always read) with a luminous rim; it swells and glows with the agent's voice, and a ring of bars answers yours. See [DESIGN.md](DESIGN.md).
+
+## Project layout
+
+```
+PersonaOnboarding/   the iOS app
+  Core/              engine, policy, validation, prompts, chat brain (pure Swift, unit-tested)
+  Voice/             Realtime voice client, audio engine, autopilot caller
+  Gmail/             Google sign-in (OAuth + PKCE)
+  Screens/           chat, incoming call, call, home, tester tools
+  Components/        orb, chat bubbles, background
+  Shaders/Orb.metal  the orb
+Tests/               engine unit tests
+Tools/               stress (chat simulator), callsim (voice simulator)
+harness/             WebSocket bridge used by callsim
+docs/                architecture and testing guides
+```
+
+More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Decisions and trade-offs
 
