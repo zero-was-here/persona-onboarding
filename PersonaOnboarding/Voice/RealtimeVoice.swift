@@ -54,6 +54,8 @@ final class RealtimeVoice {
     @ObservationIgnored private var responseHadToolCall = false
     @ObservationIgnored private var responseTranscript = ""
     @ObservationIgnored private var goodbyeRequested = false
+    @ObservationIgnored private var goodbyeStarted = false
+    @ObservationIgnored private var goodbyeFinished = false
     @ObservationIgnored private var goodbyeInstructions = "Say a warm one-sentence goodbye. Do not call tools."
     @ObservationIgnored private var currentAssistantItem: String?
     @ObservationIgnored private var lastActivity = Date()
@@ -75,6 +77,8 @@ final class RealtimeVoice {
         didReportEnd = false
         pendingHangUp = nil
         goodbyeRequested = false
+        goodbyeStarted = false
+        goodbyeFinished = false
         nudgedForSilence = false
         assistantCaption = ""
         userCaption = ""
@@ -218,7 +222,8 @@ final class RealtimeVoice {
 
         if let reason = pendingHangUp {
             let deadlinePassed = (hangUpDeadline ?? .distantFuture) < Date()
-            if (goodbyeRequested && !playing && !responseActive) || deadlinePassed {
+            // Hang up only once the goodbye response has been generated AND fully played.
+            if (goodbyeFinished && !playing) || deadlinePassed {
                 pendingHangUp = nil
                 Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(450))
@@ -333,6 +338,7 @@ final class RealtimeVoice {
             }
 
         case "response.created":
+            if goodbyeRequested && !goodbyeStarted { goodbyeStarted = true }
             responseActive = true
             responseHadAudio = false
             responseHadToolCall = false
@@ -371,6 +377,7 @@ final class RealtimeVoice {
 
         case "response.done":
             responseActive = false
+            if goodbyeStarted && !goodbyeFinished { goodbyeFinished = true }
             if pendingHangUp != nil {
                 // finish_call: ask for one real spoken goodbye, then hang up once it has played.
                 if !goodbyeRequested {
