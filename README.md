@@ -35,7 +35,7 @@ flowchart LR
 - **One brain, two channels.** Chat and call read and write the same `OnboardingState`. The call transcript lands in the chat, so switching channels never loses anything and the agent never re-asks.
 - **LLM for language, code for guarantees.** The model understands messy input and writes the replies; a deterministic `Policy` decides what's still missing, when to ring, and when someone may skip ahead. A model that says "we're done" early is overruled, and a name like `<script>` is rejected before it's stored.
 - **Text turns are a single structured-output call.** Reply, extracted fields, intent and action come back in one JSON object, so there's no second round-trip for tool calls. There's a fallback model if the first one errors.
-- **The voice call** uses the Realtime API over a WebSocket: semantic turn detection, live captions (`gpt-live-transcribe`), barge-in with truncation, function tools (`save_user_name`, `save_help_need`, `show_gmail_connect`, `mark_declined`, `rename_agent`, `finish_call`), and a spoken goodbye before hanging up. Tool results carry the next step, so the agent stays on track without a script.
+- **The voice call** uses the Realtime API over a WebSocket: semantic turn detection, live captions (`gpt-live-transcribe`), barge-in with truncation, function tools (`save_user_name`, `save_help_need`, `show_gmail_connect`, `mark_declined`, `rename_agent`, `remember_request`, `finish_call`), and a spoken goodbye before hanging up. Tool results carry the next step, so the agent stays on track without a script.
 
 ### Resilience matrix
 
@@ -47,7 +47,9 @@ flowchart LR
 | Hangs up mid-call | Keeps what it learned and continues by text with only what's missing |
 | Network drops / app backgrounded / app killed | Treated as a dropped call; on relaunch the chat picks up and offers a call back (a drop during the goodbye counts as the planned ending) |
 | Silence | Checks in after about 10 s ("Still with me?"); if it stays quiet, says it'll text instead, hangs up, and continues in chat |
-| Talks over the agent | Playback stops instantly and the server is told what was actually heard |
+| Talks over the agent | Playback stops instantly and the server is told what was actually heard. An echo guard keeps the agent's own voice (leaking from the speaker) from counting as the user talking |
+| A noise, a mumble, background voices | "Sorry, I didn't catch that?", never a guess (and never a made-up name) |
+| Asks for something off-script (code, a long draft) | Says it'll send it in the chat, remembers it, and delivers it right after onboarding ("As promised, here's…") |
 | Taps Connect Gmail while the agent is still talking | Acknowledged right after the current sentence |
 | Several answers at once / out of order | Extracts all of them |
 | "Actually call me Sam" / "rename yourself Kai" | Overwrites |
@@ -57,13 +59,14 @@ flowchart LR
 | Won't name the agent | Offers ideas, then picks a default ("Nova") that can be renamed |
 | Off-topic, privacy questions | Short honest answer (grounded in a fixed privacy fact sheet), then steers back |
 | Prompt injection / insults | Stays kind and in character, doesn't comply |
-| Speaks French, Arabic, Spanish… | Replies in their language and stays in it on the call, even after English system messages (opening lines follow the device language) |
+| Speaks French, Arabic, Spanish… | Replies in their language and stays in it on the call, even after English app notes (opening lines follow the device language) |
+| Calls back after a call ended | "Hey, it's Nova again!" and picks up where it left off |
 
 ## Stress testing
 
 Four layers, from pure logic to the real app:
 
-1. **Unit tests** for the engine (19): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, restored calls, language tracking, and more. Run `swift test`.
+1. **Unit tests** for the engine (22): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, restored calls, language tracking, and more. Run `swift test`.
 2. **Chat stress test:** an LLM plays 12 difficult personas against the real engine and brain, the harness plays the app (declines, drops, Gmail taps), and a judge model grades each transcript. Run `OPENAI_API_KEY=… swift run stress`.
 3. **Voice call simulation with real audio:** `swift run callsim` drives `gpt-realtime-2.1` with the real engine, prompts and tools, using the same event handling as the app. LLM callers answer *out loud*: their lines go through OpenAI TTS and stream into the input buffer like a live mic, so turn detection, transcription, barge-in, silence and hang-ups all run for real. The 12 callers include an interrupter, someone who goes quiet, someone who hangs up, a Gmail refuser, a skipper, a French speaker, a privacy skeptic and a troll. It needs Node (`cd harness && npm install`).
 4. **Autopilot caller in the app** (Tester tools → Autopilot caller): the same kind of AI caller talks to the agent through the real iOS audio path and UI, taps Connect Gmail, and continues by text if the call ends.
