@@ -221,14 +221,14 @@ struct ProgressConstellation: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            glyph("person", done: profile.has(.userName), declined: profile.declined.contains(.userName))
-            glyph("sparkles", done: profile.has(.helpNeed), declined: profile.declined.contains(.helpNeed))
-            glyph("envelope", done: profile.has(.gmail), declined: profile.declined.contains(.gmail))
+            glyph("person", filled: "person.fill", done: profile.has(.userName), declined: profile.declined.contains(.userName))
+            glyph("sparkles", filled: "sparkles", done: profile.has(.helpNeed), declined: profile.declined.contains(.helpNeed))
+            glyph("envelope", filled: "envelope.fill", done: profile.has(.gmail), declined: profile.declined.contains(.gmail))
         }
     }
 
-    private func glyph(_ icon: String, done: Bool, declined: Bool) -> some View {
-        Image(systemName: done ? icon + ".fill" : icon)
+    private func glyph(_ icon: String, filled: String, done: Bool, declined: Bool) -> some View {
+        Image(systemName: done ? filled : icon)
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(done ? Theme.canvas : (declined ? Theme.faint : Theme.muted))
             .frame(width: 26, height: 26)

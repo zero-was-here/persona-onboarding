@@ -68,9 +68,9 @@ final class EngineTests: XCTestCase {
         e.handle(.textBrainReplied(TextTurn(reply: "Nova it is!", agentName: "Nova", action: .startCall)))
         e.handle(.callAnswered)
         e.handle(.callConnected)
-        // On the call: "write me a Python script that renames my photos" → promised for the chat.
-        e.handle(.voiceToolCall(name: "remember_request", arguments: #"{"request":"a Python script that renames photos by date"}"#, callID: "r1"))
-        XCTAssertEqual(e.state.laterRequests, ["a Python script that renames photos by date"])
+        // On the call: "can you draft an email to my landlord about the heater?" → promised for the chat.
+        e.handle(.voiceToolCall(name: "remember_request", arguments: #"{"request":"an email to the landlord about the broken heater"}"#, callID: "r1"))
+        XCTAssertEqual(e.state.laterRequests, ["an email to the landlord about the broken heater"])
         e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Sam"}"#, callID: "c1"))
         e.handle(.voiceToolCall(name: "save_help_need", arguments: #"{"summary":"inbox","category":"email"}"#, callID: "c2"))
         e.handle(.gmailConnected(GmailConnection(email: "sam@gmail.com", isSimulated: true)))
@@ -79,12 +79,26 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(e.state.phase, .graduated)
         let delivery = fx.compactMap { effect -> String? in if case .runTextBrain(let note) = effect { return note } else { return nil } }
         XCTAssertEqual(delivery.count, 1, "the promised item is delivered right after graduation")
-        XCTAssertTrue(delivery.first?.contains("Python script") ?? false)
+        XCTAssertTrue(delivery.first?.contains("landlord") ?? false)
         XCTAssertNil(e.state.laterRequests, "delivered once")
         // Same from the text channel.
         let t = engine()
-        t.handle(.textBrainReplied(TextTurn(reply: "Happy to, right after we're set up!", agentName: "Kai", rememberRequest: "regex for emails")))
-        XCTAssertEqual(t.state.laterRequests, ["regex for emails"])
+        t.handle(.textBrainReplied(TextTurn(reply: "Happy to, right after we're set up!", agentName: "Kai", rememberRequest: "a plan for next week")))
+        XCTAssertEqual(t.state.laterRequests, ["a plan for next week"])
+    }
+
+    func testCallBackGreetingOnlyOnALaterCall() {
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Nova it is!", agentName: "Nova", action: .startCall)))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        e.handle(.voiceTranscript(role: .assistant, text: "Hey, it's Nova! What should I call you?"))
+        // Instructions refreshed mid-call must not turn the first call into a "call back".
+        XCTAssertFalse(BrainPrompts.voiceInstructions(e.state).contains("again!"))
+        e.handle(.callEnded(.silence))
+        e.handle(.requestCall)
+        e.handle(.callAnswered)
+        XCTAssertTrue(BrainPrompts.voiceInstructions(e.state).contains("again!"), "second call opens as a call back")
     }
 
     func testEarlyGraduationNeedsHelpNeedButNeverTraps() {

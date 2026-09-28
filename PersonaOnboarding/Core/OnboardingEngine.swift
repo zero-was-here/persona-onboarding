@@ -427,7 +427,7 @@ public final class OnboardingEngine {
         if let asks = state.laterRequests, !asks.isEmpty {
             state.laterRequests = nil
             let list = asks.map { "\"\($0)\"" }.joined(separator: "; ")
-            effects.append(.runTextBrain(note: "While getting set up, the user asked you for: \(list). You promised to do it here once they were in. Do it now, completely (full code or a full draft is fine), starting with a short line like \"As promised, here's…\"."))
+            effects.append(.runTextBrain(note: "While getting set up, the user asked you for: \(list). You promised to do it here once they were in. Do it now, completely (a full draft or plan is fine), starting with a short line like \"As promised, here's…\"."))
         }
         return effects
     }

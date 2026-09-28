@@ -49,7 +49,8 @@ flowchart LR
 | Silence | Checks in after about 10 s ("Still with me?"); if it stays quiet, says it'll text instead, hangs up, and continues in chat |
 | Talks over the agent | Playback stops instantly and the server is told what was actually heard. An echo guard keeps the agent's own voice (leaking from the speaker) from counting as the user talking |
 | A noise, a mumble, background voices | "Sorry, I didn't catch that?", never a guess (and never a made-up name) |
-| Asks for something off-script (code, a long draft) | Says it'll send it in the chat, remembers it, and delivers it right after onboarding ("As promised, here's…") |
+| Asks for something outside its job (code, an app, a game) | Says honestly it can't and offers the closest thing it can do. No false promises |
+| Asks for something it can do, just not on a call (an email draft) | Promises it for the chat, remembers it, and delivers it right after onboarding ("As promised, here's…") |
 | Taps Connect Gmail while the agent is still talking | Acknowledged right after the current sentence |
 | Several answers at once / out of order | Extracts all of them |
 | "Actually call me Sam" / "rename yourself Kai" | Overwrites |
@@ -66,7 +67,7 @@ flowchart LR
 
 Four layers, from pure logic to the real app:
 
-1. **Unit tests** for the engine (22): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, restored calls, language tracking, and more. Run `swift test`.
+1. **Unit tests** for the engine (23): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, restored calls, language tracking, and more. Run `swift test`.
 2. **Chat stress test:** an LLM plays 12 difficult personas against the real engine and brain, the harness plays the app (declines, drops, Gmail taps), and a judge model grades each transcript. Run `OPENAI_API_KEY=… swift run stress`.
 3. **Voice call simulation with real audio:** `swift run callsim` drives `gpt-realtime-2.1` with the real engine, prompts and tools, using the same event handling as the app. LLM callers answer *out loud*: their lines go through OpenAI TTS and stream into the input buffer like a live mic, so turn detection, transcription, barge-in, silence and hang-ups all run for real. The 12 callers include an interrupter, someone who goes quiet, someone who hangs up, a Gmail refuser, a skipper, a French speaker, a privacy skeptic and a troll. It needs Node (`cd harness && npm install`).
 4. **Autopilot caller in the app** (Tester tools → Autopilot caller): the same kind of AI caller talks to the agent through the real iOS audio path and UI, taps Connect Gmail, and continues by text if the call ends.
