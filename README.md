@@ -84,7 +84,7 @@ Four layers, from pure logic to the real app:
 Latest results:
 
 - **Chat:** all 12 personas finish, and 10/12 also clear the strict judge bar (one agent name picked by the agent instead of the persona, one privacy answer over the word limit). Chat turns take about 1.8 s median.
-- **Voice (audio simulation):** all 15 callers finish onboarding and 14/15 clear the strict bar (in that run the interrupter never actually talked over the agent). Judge scores 7–10, median 8/10. The agent starts answering about 1.1 s (median) after the caller stops talking.
+- **Voice (audio simulation):** all 15 callers finish onboarding, with judge scores of 6–10 (median 9/10). The agent starts answering about 1.1 s (median) after the caller stops talking. The strict bar flags 4 of 15: one transient socket drop (it recovered into chat), a name spelled "Yousef" by speech-to-text, one long privacy answer, and the judge marking the agent down for declining to write code (intended).
 - **In the app (Simulator, Autopilot caller):** all 8 personas finish end to end through the real UI and audio path, in about 30–75 s per call.
 
 ## Design
