@@ -354,6 +354,8 @@ final class AppModel {
             ringTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
                 guard let self, !Task.isCancelled, self.state.call.status == .ringing else { return }
+                // A call is coming in: put the keyboard away, like the phone would.
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 self.ringVisible = true
                 SoundFX.shared.startRinging()
                 try? await Task.sleep(for: .seconds(22))

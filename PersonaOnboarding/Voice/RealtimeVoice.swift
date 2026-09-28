@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AVFoundation
+import UIKit
 
 /// The voice call: OpenAI Realtime API (gpt-realtime-2.1) over a WebSocket, with server-side
 /// semantic VAD, live captions (gpt-live-transcribe), function tools, barge-in, and silence/drop handling.
@@ -93,6 +94,7 @@ final class RealtimeVoice {
         guard status == .idle else { return }
         self.apiKey = apiKey
         self.transcriptionPrompt = transcriptionPrompt
+        UIApplication.shared.isIdleTimerDisabled = true   // like a real call: the screen doesn't lock mid-sentence
         generation += 1
         let gen = generation
         status = .connecting
@@ -388,7 +390,7 @@ final class RealtimeVoice {
         if status == .live || status == .ending { audio.checkHealth() }
         let playing = audio.isPlaying
         assistantSpeaking = playing
-        diagnostics = "\(audio.info) · \(audio.route) · out peak \(String(format: "%.2f", audio.outputPeak)) · mic peak \(String(format: "%.2f", audio.inputPeak)) · rebuilds \(audio.rebuilds) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
+        diagnostics = "\(audio.info) · \(audio.route) · out peak \(String(format: "%.2f", audio.outputPeak)) · mic peak \(String(format: "%.2f", audio.inputPeak)) · rebuilds \(audio.rebuilds) · echo held \(audio.guardedChunks) · barge-ins \(audio.bargeIns) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
         if playing || userSpeaking || responseActive { lastActivity = Date() }
 
         if let reason = pendingHangUp {
@@ -439,6 +441,7 @@ final class RealtimeVoice {
     }
 
     private func teardown() {
+        UIApplication.shared.isIdleTimerDisabled = false
         generation += 1
         syntheticMic = false
         callerStreaming = false

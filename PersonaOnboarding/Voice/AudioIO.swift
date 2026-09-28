@@ -48,7 +48,22 @@ final class AudioIO {
     /// Hardware formats the current engine was wired for (a change means the wiring must be rebuilt).
     private var wiredFormats = ""
 
+    // Echo guard (touched only on the mic tap's thread, except the resets in start()).
+    /// The call's first agent reply has finished playing (the echo canceller has had time to adapt).
+    private var guardWarmedUp = false
+    private var heardAgent = false
+    /// Typical mic level while only the agent's own voice leaks back from the speaker.
+    private var echoFloor: Float = 0.3
+    private var loudSince: CFAbsoluteTime?
+    private var gateOpenUntil: CFAbsoluteTime = 0
+    /// The last few mic chunks held back while gated, sent first when real speech opens the gate.
+    private var preRoll: [Data] = []
+    private var headsetRoute = false
+
     private(set) var voiceProcessing = false
+    /// Diagnostics: mic chunks held back as echo, and times real speech got through while the agent talked.
+    private(set) var guardedChunks = 0
+    private(set) var bargeIns = 0
     private(set) var micChunks = 0
     private(set) var outChunks = 0
     private(set) var rebuilds = 0
@@ -93,6 +108,8 @@ final class AudioIO {
         wantsSpeaker = speaker
         micChunks = 0; outChunks = 0; rebuilds = 0; outputPeak = 0; inputPeak = 0
         recentRebuilds = []
+        guardWarmedUp = false; heardAgent = false; echoFloor = 0.3; loudSince = nil; gateOpenUntil = 0
+        preRoll = []; guardedChunks = 0; bargeIns = 0
         clearPlayback()
 
         let session = AVAudioSession.sharedInstance()
@@ -334,6 +351,7 @@ final class AudioIO {
         let out = r.outputs.map(Self.portName).joined(separator: "+")
         let inp = r.inputs.map(Self.portName).joined(separator: "+")
         route = "out \(out.isEmpty ? "none" : out) · in \(inp.isEmpty ? "none" : inp)"
+        headsetRoute = hasHeadset
     }
 
     private static func portName(_ p: AVAudioSessionPortDescription) -> String {
@@ -454,15 +472,59 @@ final class AudioIO {
         onLevels?(inputLevel, playingLevel())
 
         guard !muted, !pauseMic else { return }
-        // No echo cancellation: don't feed the agent its own voice (plus a short tail).
-        if halfDuplex {
-            lock.lock(); let busy = CFAbsoluteTimeGetCurrent() < playbackEnd + 0.35; lock.unlock()
-            if busy { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock(); let end = playbackEnd; lock.unlock()
+        let agentTalking = now < end + 0.3   // plus the room's echo tail
+        if agentTalking { heardAgent = true } else if heardAgent { guardWarmedUp = true }
+
+        // No echo cancellation at all: never feed the agent its own voice.
+        if halfDuplex && now < end + 0.35 { return }
+        guard let data = convert(buffer, with: converter) else { return }
+
+        if !agentTalking || halfDuplex || headsetRoute {
+            preRoll.removeAll()
+            loudSince = nil
+            send(data)
+            return
         }
 
+        // Echo guard. Even with echo cancellation, some of the agent's own voice leaks back from the speaker
+        // (most at the start of a call, while the canceller adapts). Sent as-is, it made the server think the
+        // user spoke: the agent cut itself off and "heard" words nobody said. So while the agent talks, only
+        // speech clearly louder than that leak, lasting ~150 ms, gets through (its held-back onset first).
+        // Nothing gets through during the call's first reply.
+        let threshold = min(0.85, max(0.5, echoFloor + 0.25))
+        if level > threshold {
+            if loudSince == nil { loudSince = now }
+        } else {
+            loudSince = nil
+        }
+        let sustained = loudSince.map { now - $0 >= 0.15 } ?? false
+        if guardWarmedUp && (sustained || now < gateOpenUntil) {
+            if sustained {
+                if now >= gateOpenUntil { bargeIns += 1 }
+                gateOpenUntil = now + 0.6
+            }
+            for chunk in preRoll { send(chunk) }
+            preRoll.removeAll()
+            send(data)
+        } else {
+            if loudSince == nil { echoFloor += (level - echoFloor) * 0.05 }
+            preRoll.append(data)
+            if preRoll.count > 6 { preRoll.removeFirst(preRoll.count - 6) }
+            guardedChunks += 1
+        }
+    }
+
+    private func send(_ data: Data) {
+        micChunks += 1
+        onMicChunk?(data)
+    }
+
+    private func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter) -> Data? {
         let ratio = sendFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
-        guard let out = AVAudioPCMBuffer(pcmFormat: sendFormat, frameCapacity: capacity) else { return }
+        guard let out = AVAudioPCMBuffer(pcmFormat: sendFormat, frameCapacity: capacity) else { return nil }
         var consumed = false
         var error: NSError?
         converter.convert(to: out, error: &error) { _, status in
@@ -474,10 +536,8 @@ final class AudioIO {
             status.pointee = .haveData
             return buffer
         }
-        guard error == nil, out.frameLength > 0, let ch = out.int16ChannelData else { return }
-        let data = Data(bytes: ch[0], count: Int(out.frameLength) * 2)
-        micChunks += 1
-        onMicChunk?(data)
+        guard error == nil, out.frameLength > 0, let ch = out.int16ChannelData else { return nil }
+        return Data(bytes: ch[0], count: Int(out.frameLength) * 2)
     }
 
     private func meterOutput(_ buffer: AVAudioPCMBuffer) {

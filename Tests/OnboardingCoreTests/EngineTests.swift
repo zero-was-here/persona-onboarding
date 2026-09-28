@@ -63,6 +63,30 @@ final class EngineTests: XCTestCase {
         XCTAssertFalse(e.state.graduatedEarly)
     }
 
+    func testPromisesMadeDuringOnboardingAreKeptAfterGraduation() {
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Nova it is!", agentName: "Nova", action: .startCall)))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        // On the call: "write me a Python script that renames my photos" → promised for the chat.
+        e.handle(.voiceToolCall(name: "remember_request", arguments: #"{"request":"a Python script that renames photos by date"}"#, callID: "r1"))
+        XCTAssertEqual(e.state.laterRequests, ["a Python script that renames photos by date"])
+        e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Sam"}"#, callID: "c1"))
+        e.handle(.voiceToolCall(name: "save_help_need", arguments: #"{"summary":"inbox","category":"email"}"#, callID: "c2"))
+        e.handle(.gmailConnected(GmailConnection(email: "sam@gmail.com", isSimulated: true)))
+        e.handle(.voiceToolCall(name: "finish_call", arguments: #"{"reason":"complete"}"#, callID: "c3"))
+        let fx = e.handle(.callEnded(.completed))
+        XCTAssertEqual(e.state.phase, .graduated)
+        let delivery = fx.compactMap { effect -> String? in if case .runTextBrain(let note) = effect { return note } else { return nil } }
+        XCTAssertEqual(delivery.count, 1, "the promised item is delivered right after graduation")
+        XCTAssertTrue(delivery.first?.contains("Python script") ?? false)
+        XCTAssertNil(e.state.laterRequests, "delivered once")
+        // Same from the text channel.
+        let t = engine()
+        t.handle(.textBrainReplied(TextTurn(reply: "Happy to, right after we're set up!", agentName: "Kai", rememberRequest: "regex for emails")))
+        XCTAssertEqual(t.state.laterRequests, ["regex for emails"])
+    }
+
     func testEarlyGraduationNeedsHelpNeedButNeverTraps() {
         let e = engine()
         e.handle(.textBrainReplied(TextTurn(reply: "Nice", agentName: "Ivy")))

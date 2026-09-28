@@ -13,6 +13,8 @@ public struct OnboardingState: Codable, Equatable, Sendable {
     public var graduatedAt: Date?
     /// Non-English language the user is speaking (nil = English / not sure yet).
     public var spokenLanguage: String?
+    /// Things the user asked for mid-onboarding that the agent promised to do in the chat afterwards.
+    public var laterRequests: [String]?
     public var startedAt = Date()
     public var log: [String] = []
 
@@ -219,6 +221,10 @@ public final class OnboardingEngine {
         }
 
         applyFields(agentName: turn.agentName, userName: turn.userName, helpNeed: turn.helpNeed, category: turn.helpCategory)
+        if let r = Self.cleanRequest(turn.rememberRequest) {
+            state.laterRequests = (state.laterRequests ?? []) + [r]
+            log("remembered for later: \(r)")
+        }
 
         if turn.intent == .wantsSkip && state.profile.agentName == nil {
             // Skipping the naming: take a default name and stay in text (no surprise call for an impatient user).
@@ -338,6 +344,14 @@ public final class OnboardingEngine {
                 if what == .gmail { state.gmailCardVisible = false }
                 result["note"] = "Respect it. Don't ask for \(what.rawValue) again on this call."
             }
+        case "remember_request":
+            if let r = Self.cleanRequest(args["request"] as? String) {
+                state.laterRequests = (state.laterRequests ?? []) + [r]
+                log("remembered for later: \(r)")
+                result["note"] = "Noted: it'll be waiting in the chat right after the call. Say so in a few words, then carry on."
+            } else {
+                result = ["ok": false, "error": "Say what they asked for in a few words."]
+            }
         case "finish_call":
             let reason: CallEndReason
             switch args["reason"] as? String {
@@ -408,7 +422,19 @@ public final class OnboardingEngine {
         state.graduatedAt = now()
         state.gmailCardVisible = false
         log("graduated (\(reason))\(state.graduatedEarly ? " early" : "")")
-        return [.haptic(.success), .graduate]
+        var effects: [OnboardingEffect] = [.haptic(.success), .graduate]
+        // Keep the promises made along the way ("I'll send you that code in the chat").
+        if let asks = state.laterRequests, !asks.isEmpty {
+            state.laterRequests = nil
+            let list = asks.map { "\"\($0)\"" }.joined(separator: "; ")
+            effects.append(.runTextBrain(note: "While getting set up, the user asked you for: \(list). You promised to do it here once they were in. Do it now, completely (full code or a full draft is fine), starting with a short line like \"As promised, here's…\"."))
+        }
+        return effects
+    }
+
+    static func cleanRequest(_ raw: String?) -> String? {
+        guard let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines), t.count >= 3 else { return nil }
+        return String(t.prefix(300))
     }
 
     // MARK: - Helpers

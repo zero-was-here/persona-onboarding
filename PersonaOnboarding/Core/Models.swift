@@ -150,9 +150,12 @@ public struct TextTurn: Codable, Equatable, Sendable {
     public var helpCategory: HelpCategory?
     public var intent: Intent
     public var action: Action
+    /// Something the user asked for that the agent promised to do once they're set up (e.g. code).
+    public var rememberRequest: String?
 
     public init(reply: String, agentName: String? = nil, userName: String? = nil, helpNeed: String? = nil,
-                helpCategory: HelpCategory? = nil, intent: Intent = .answer, action: Action = .none) {
+                helpCategory: HelpCategory? = nil, intent: Intent = .answer, action: Action = .none,
+                rememberRequest: String? = nil) {
         self.reply = reply
         self.agentName = agentName
         self.userName = userName
@@ -160,11 +163,13 @@ public struct TextTurn: Codable, Equatable, Sendable {
         self.helpCategory = helpCategory
         self.intent = intent
         self.action = action
+        self.rememberRequest = rememberRequest
     }
 
     enum CodingKeys: String, CodingKey {
         case reply, intent, action
         case agentName = "agent_name", userName = "user_name", helpNeed = "help_need", helpCategory = "help_category"
+        case rememberRequest = "remember_request"
     }
 
     public init(from decoder: Decoder) throws {
@@ -177,5 +182,6 @@ public struct TextTurn: Codable, Equatable, Sendable {
         helpCategory = (try? c.decodeIfPresent(String.self, forKey: .helpCategory)).flatMap { $0.flatMap(HelpCategory.init(rawValue:)) }
         intent = (try? c.decode(String.self, forKey: .intent)).flatMap(Intent.init(rawValue:)) ?? .answer
         action = (try? c.decode(String.self, forKey: .action)).flatMap(Action.init(rawValue:)) ?? .none
+        rememberRequest = try? c.decodeIfPresent(String.self, forKey: .rememberRequest)
     }
 }
