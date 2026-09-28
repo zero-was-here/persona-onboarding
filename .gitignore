@@ -12,4 +12,5 @@ PersonaOnboarding/Secrets.json
 # Local sync bundles / reports
 .sync/
 stress-results/
-node_modules/
+node_modules
+.derived-data-log-*
