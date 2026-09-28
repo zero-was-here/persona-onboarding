@@ -68,7 +68,7 @@ struct GmailConnectSheet: View {
                         VStack(alignment: .leading, spacing: 14) {
                             if realSignIn {
                                 permission("person.crop.circle.badge.checkmark", "Confirm your Google account")
-                                permission("tag", "See your Gmail label names, never your emails")
+                                permission("envelope.badge.shield.half.filled", "Only your name and Gmail address, never your emails")
                                 permission("hand.raised", "Disconnect anytime; nothing is sold or shared")
                             } else {
                                 permission("tray.full", "Read and organize your inbox")
@@ -135,7 +135,7 @@ struct GmailConnectSheet: View {
                     .disabled(stage == .connecting)
 
                     Text(realSignIn
-                         ? "Real Google sign-in. This prototype only asks to see your Gmail labels, never your emails."
+                         ? "Real Google sign-in. This prototype only confirms your Gmail address; it can't read or send email."
                          : "Prototype: this demo connection is simulated.")
                         .multilineTextAlignment(.center)
                         .font(Typo.sans(12))

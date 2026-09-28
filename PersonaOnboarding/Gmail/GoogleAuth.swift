@@ -4,12 +4,15 @@ import CryptoKit
 import SwiftUI
 
 /// Real "Sign in with Google" for the Gmail step: OAuth 2.0 authorization code flow with PKCE for native
-/// apps, no SDK. Scopes are basic identity plus `gmail.labels`, which Google classes as non-sensitive, so
-/// any Google account can connect without Google's app verification. Reading messages needs restricted
-/// scopes (`gmail.readonly` and up), which require Google's security review: that's the production path.
+/// apps, no SDK. The trial asks only for basic identity (openid, email, profile): Google lets any account
+/// grant those with no warning screen and no app review, so every reviewer can connect their real Gmail
+/// address. `gmail.labels` (non-sensitive) is wired up and turns on with `requestLabels` once the consent
+/// screen is published; reading messages (`gmail.readonly` and up) needs Google's security review.
 enum GoogleAuth {
-    /// The iOS OAuth client ID (public, not a secret). Empty = fall back to the simulated connection.
-    static let defaultClientID = ""
+    /// The iOS OAuth client ID (public, not a secret; project "Persona Trial"). Empty = demo connection.
+    static let defaultClientID = "476108484232-vsuuu4abd3q3e9ke8ja9se6rsfobkf5b.apps.googleusercontent.com"
+    /// Off for the trial: label access needs the consent screen published with a privacy-policy URL.
+    static let requestLabels = false
 
     struct Account: Equatable {
         var email: String
@@ -30,7 +33,9 @@ enum GoogleAuth {
         }
     }
 
-    static let scopes = ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.labels"]
+    static var scopes: [String] {
+        ["openid", "email", "profile"] + (requestLabels ? ["https://www.googleapis.com/auth/gmail.labels"] : [])
+    }
 
     static var clientID: String { AppSecrets.googleClientID }
     static var isConfigured: Bool { clientID.hasSuffix(".apps.googleusercontent.com") }
@@ -74,7 +79,7 @@ enum GoogleAuth {
         let tokens = try await exchange(code: code, verifier: verifier)
         let profile = decodeIDToken(tokens.idToken)
         guard let email = profile.email else { throw Failure.denied("no email address returned") }
-        let labels = await fetchLabels(accessToken: tokens.accessToken)
+        let labels = requestLabels ? await fetchLabels(accessToken: tokens.accessToken) : nil
         return Account(email: email.lowercased(), name: profile.name, labelCount: labels?.count, userLabels: labels?.user ?? [])
     }
 

@@ -33,7 +33,7 @@ public enum BrainPrompts {
     PRIVACY FACTS (answer privacy questions in 1–2 short sentences using only these):
     - Connecting Gmail lets you read the emails in their inbox (all of them, so you can sort everything) and draft replies they approve before anything is sent. You never send on your own.
     - Their email data is stored encrypted, used only to help them, never sold or shared, and deleted when they disconnect or ask.
-    - This build is a prototype: Google sign-in is real, but for now it only asks to see their Gmail label names (to confirm the connection). Reading and sorting messages comes once Google's full security review is done. Say this only if they ask whether it's real or what you can see right now.
+    - This build is a prototype: Google sign-in is real, but for now it only confirms their Gmail address. Reading and sorting messages comes once Google's full security review is done. Say this only if they ask whether it's real or what you can see right now.
     """
 
     // MARK: - Text brain
