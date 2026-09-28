@@ -15,11 +15,20 @@ final class AppModel {
     /// The opening lines are typed out one by one (typing dots, then the bubble) instead of appearing at once.
     private(set) var introVisible: Int?
     private(set) var introTyping = false
+    /// The opening line currently being written out word by word (ChatGPT-style streaming).
+    struct IntroStream: Equatable { var index: Int; var shown: String }
+    private(set) var introStream: IntroStream?
     @ObservationIgnored private var introTask: Task<Void, Never>?
 
     var visibleTranscript: [Message] {
         guard let n = introVisible else { return state.transcript }
-        return Array(state.transcript.prefix(n))
+        var out = Array(state.transcript.prefix(n))
+        if let s = introStream, s.index < state.transcript.count {
+            var m = state.transcript[s.index]   // same id, so the bubble grows in place
+            m.text = s.shown
+            out.append(m)
+        }
+        return out
     }
     var showsTyping: Bool { isThinking || introTyping }
     var showTester = false
@@ -182,18 +191,29 @@ final class AppModel {
 
     private func playIntro() {
         introTask?.cancel()
-        let count = state.transcript.count
-        guard count > 0 else { return }
+        let lines = state.transcript.map(\.text)
+        guard !lines.isEmpty else { return }
         introVisible = 0
+        introStream = nil
         introTask = Task { [weak self] in
-            for i in 1...count {
+            for (i, line) in lines.enumerated() {
                 guard let self, !Task.isCancelled else { return }
+                // A beat of "typing", then the line streams in word by word like a model writing it.
                 self.introTyping = true
-                try? await Task.sleep(for: .milliseconds(i == 1 ? 750 : 1000))
+                try? await Task.sleep(for: .milliseconds(i == 0 ? 650 : 420))
                 guard !Task.isCancelled else { return }
                 self.introTyping = false
-                withAnimation(Motion.spring) { self.introVisible = i }
-                try? await Task.sleep(for: .milliseconds(300))
+                let words = line.split(separator: " ")
+                var shown = ""
+                for word in words {
+                    shown += (shown.isEmpty ? "" : " ") + word
+                    self.introStream = IntroStream(index: i, shown: shown)
+                    try? await Task.sleep(for: .milliseconds(Int.random(in: 40...75)))
+                    guard !Task.isCancelled else { return }
+                }
+                self.introStream = nil
+                self.introVisible = i + 1
+                try? await Task.sleep(for: .milliseconds(260))
             }
             self?.introVisible = nil
         }
@@ -203,6 +223,7 @@ final class AppModel {
         introTask?.cancel()
         introTask = nil
         introTyping = false
+        introStream = nil
         introVisible = nil
     }
 

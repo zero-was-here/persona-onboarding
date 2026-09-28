@@ -98,6 +98,7 @@ struct ChatScreen: View {
                 .onChange(of: model.state.transcript.count) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.showsTyping) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.introVisible) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.introStream?.index) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.state.gmailCardVisible) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: inputFocused) { _, _ in scrollToBottom(proxy) }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
