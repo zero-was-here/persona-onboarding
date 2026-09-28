@@ -86,6 +86,13 @@ public enum BrainPrompts {
         """
     }
 
+    static func recentChat(_ s: OnboardingState) -> String {
+        let lines = s.transcript.filter { $0.role != .event }.suffix(6).map { m in
+            "\(m.role == .user ? "User" : "You"): \(m.text.prefix(200))"
+        }
+        return lines.isEmpty ? "(none)" : lines.joined(separator: "\n")
+    }
+
     static func callActionLine(_ s: OnboardingState) -> String {
         if Policy.canAutoCall(s) { return "now that you have a name, say you'll ring them for a quick call." }
         if s.profile.agentName == nil && s.call.attempts == 0 && !s.call.userPrefersText {
@@ -165,6 +172,9 @@ public enum BrainPrompts {
         - If they speak another language (French, Arabic, Darija, Spanish…), switch to it.
 
         FIRST TURN: \(opener)
+
+        RECENT CHAT BEFORE THIS CALL (for context; open the call in the same language the user wrote in):
+        \(recentChat(s))
 
         WHAT YOU NEED ON THIS CALL (in whatever order the conversation allows)
         1. Their name, then call save_user_name.

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AVFoundation
 
 /// The voice call: OpenAI Realtime API (gpt-realtime-2.1) over a WebSocket, with server-side
 /// semantic VAD, live captions (gpt-live-transcribe), function tools, barge-in, and silence/drop handling.
@@ -62,6 +63,7 @@ final class RealtimeVoice {
     @ObservationIgnored private var hangUpDeadline: Date?
     @ObservationIgnored private var sendQueue = DispatchQueue(label: "voice.send")
     @ObservationIgnored private var didReportEnd = false
+    @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
 
     // MARK: - Lifecycle
 
@@ -183,6 +185,14 @@ final class RealtimeVoice {
         }
         status = .live
         lastActivity = Date()
+        // A real phone call, Siri or an alarm interrupting our audio = the call dropped.
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+            Task { @MainActor [weak self] in self?.finish(.dropped, error: "Audio interrupted") }
+        }
         onEvent?(.connected)
         // The agent speaks first.
         send(["type": "response.create"])
@@ -238,6 +248,7 @@ final class RealtimeVoice {
 
     private func teardown() {
         generation += 1
+        if let o = interruptionObserver { NotificationCenter.default.removeObserver(o); interruptionObserver = nil }
         watchdog?.cancel()
         watchdog = nil
         audio.onMicChunk = nil
