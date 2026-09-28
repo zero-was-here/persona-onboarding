@@ -42,11 +42,14 @@ static float orbFbm(float2 p) {
     float2 uv = (position - size * 0.5) / (min(size.x, size.y) * 0.5);
     float r0 = length(uv);
     float ang = atan2(uv.y, uv.x);
+    // Direction on the unit circle: continuous all the way round. (Noise sampled on the atan2 angle has a
+    // seam at ±π, which split the orb's left edge.)
+    float2 dir = uv / max(r0, 1e-4);
 
-    // Silhouette: slow breathing plus a soft, low-frequency swell with the voice (stays round).
+    // Silhouette: slow breathing, a clear swell with the voice, and a soft organic wobble.
     float breathe = sin(time * 1.1) * 0.010;
-    float wob = (orbNoise(float2(ang * 1.2 + flow * 2.0, flow * 1.3)) - 0.5) * (0.018 + level * 0.07);
-    float radius = 0.66 + breathe + wob + level * 0.05 + excited * 0.01;
+    float wob = (orbNoise(dir * 1.35 + float2(flow * 1.7, -flow * 1.2)) - 0.5) * (0.016 + level * 0.07);
+    float radius = 0.62 + breathe + wob + level * 0.08 + excited * 0.012;
     float r = r0 / radius;
 
     float3 cA = float3(colorA.rgb);
@@ -54,13 +57,14 @@ static float orbFbm(float2 p) {
     float3 cC = float3(colorC.rgb);
     float3 cI = float3(irid.rgb);
 
-    // Halo outside the sphere (premultiplied), brighter while it talks.
+    // Halo outside the sphere (premultiplied), glowing up while it talks. Faded out before the view's
+    // edge so it never shows a square cut-off.
     if (r > 1.0) {
         float d = r - 1.0;
-        float halo = exp(-5.0 * d) * (0.24 + 0.36 * energy + 0.5 * level);
-        float fade = smoothstep(1.0, 0.0, d * 1.3);
-        float a = clamp(halo * fade, 0.0, 1.0) * 0.8;
-        float3 hc = mix(cA, cB, 0.35 + 0.2 * level) * a;
+        float halo = exp(-4.5 * d) * (0.22 + 0.30 * energy + 0.95 * level);
+        float window = smoothstep(1.0, 0.80, r0);
+        float a = clamp(halo * window, 0.0, 1.0) * 0.8;
+        float3 hc = mix(cA, cB, 0.35 + 0.35 * level) * a;
         return half4(half3(hc), half(a));
     }
 
@@ -83,7 +87,7 @@ static float orbFbm(float2 p) {
     float3 col = base * (0.45 + 0.75 * diff);
     float depth = smoothstep(-0.2, 1.0, -n.y * 0.6 + 0.4);
     col = mix(col, col * 0.64, depth * 0.33);
-    col += cB * pow(z, 3.0) * (0.16 + 0.22 * energy + 0.35 * level);
+    col += cB * pow(z, 2.2) * (0.14 + 0.20 * energy + 0.65 * level);
 
     // Fresnel rim + slow iridescence.
     float fres = pow(1.0 - z, 2.4);

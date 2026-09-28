@@ -1,39 +1,60 @@
 import AVFoundation
 
 /// Full-duplex audio for the call: mic → 24 kHz PCM16 chunks, model audio → speaker.
-/// On a device it uses Apple's voice-processing I/O (echo cancellation) so the agent doesn't hear
-/// itself. In the Simulator voice processing is unreliable, so the mic is gated while the agent talks.
+///
+/// On a device it uses Apple's voice-processing I/O (echo cancellation) so the agent doesn't hear itself.
+/// Without echo cancellation (Simulator, or a device that refuses it) the mic is gated while the agent talks.
+///
+/// Built to never go silent: every call gets a fresh engine; whenever iOS changes the audio hardware under
+/// it (speaker toggle, Bluetooth, route change, media reset) or the output stops rendering, the engine is
+/// rebuilt from scratch and whatever the agent hadn't finished saying is replayed from where it was.
 final class AudioIO {
     var onMicChunk: ((Data) -> Void)?
     var onLevels: ((_ input: Float, _ output: Float) -> Void)?
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private var converter: AVAudioConverter?
+    private var engine: AVAudioEngine?
+    private var player: AVAudioPlayerNode?
     private let playFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)!
     private let sendFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000, channels: 1, interleaved: true)!
     private let lock = NSLock()
     private var inputLevel: Float = 0
-    private var outputLevel: Float = 0
     private var running = false
-    private var configObserver: NSObjectProtocol?
+    private var observers: [NSObjectProtocol] = []
+    private var rebuildPending = false
+    private var recentRebuilds: [CFAbsoluteTime] = []
 
     // Playback clock (time-based, so a missed completion callback can never leave us "speaking" forever).
     private var playbackEnd: CFAbsoluteTime = 0
     private var itemStart: CFAbsoluteTime?
     private var itemScheduledSeconds: Double = 0
+    /// Audio handed to the player that may not have been heard yet (replayed after an engine rebuild).
+    private var queued: [(start: CFAbsoluteTime, buffer: AVAudioPCMBuffer)] = []
+    /// Loudness of what's playing, 40 ms at a time, stamped with when it's heard. Drives the orb, and
+    /// doesn't depend on metering the output hardware.
+    private var levelTimeline: [(at: CFAbsoluteTime, level: Float)] = []
+    /// Last time the output mixer rendered anything (proves the engine is alive).
+    private var lastRender: CFAbsoluteTime = 0
 
     #if targetEnvironment(simulator)
-    private let useVoiceProcessing = false
-    private let halfDuplex = true
+    private static let wantsVoiceProcessing = false
     #else
-    private let useVoiceProcessing = true
-    private let halfDuplex = false
+    private static let wantsVoiceProcessing = true
     #endif
+    /// Set once voice processing misbehaves on this device; later engines go straight to the safe path.
+    private static var voiceProcessingFailed = false
 
+    private var halfDuplex = true
+    private var wantsSpeaker = true
+
+    private(set) var voiceProcessing = false
     private(set) var micChunks = 0
     private(set) var outChunks = 0
+    private(set) var rebuilds = 0
     private(set) var info = "idle"
+    private(set) var route = "—"
+    /// Loudest level seen at the output mixer / mic this call (diagnostics: proves audio flowed).
+    private(set) var outputPeak: Float = 0
+    private(set) var inputPeak: Float = 0
 
     var muted = false
     /// Set while the Tester "simulated caller" streams synthetic speech, so real mic audio doesn't interleave.
@@ -53,80 +74,242 @@ final class AudioIO {
         return Int(heard * 1000)
     }
 
+    /// True when a headset, AirPods or car audio carries the call (close-talking mic, not the room).
+    var hasHeadset: Bool {
+        let headsetPorts: [AVAudioSession.Port] = [.headphones, .bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .carAudio]
+        return AVAudioSession.sharedInstance().currentRoute.outputs.contains { headsetPorts.contains($0.portType) }
+    }
+
     /// Called when a new assistant message starts.
     func resetPlayedCounter() {
         lock.lock(); itemStart = nil; itemScheduledSeconds = 0; lock.unlock()
     }
 
-    func start() throws {
+    // MARK: - Lifecycle
+
+    func start(speaker: Bool) throws {
+        wantsSpeaker = speaker
+        micChunks = 0; outChunks = 0; rebuilds = 0; outputPeak = 0; inputPeak = 0
+        recentRebuilds = []
+        clearPlayback()
+
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: categoryOptions)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true)
+        // Settle the route before the engine exists, so starting it doesn't trigger a hardware change.
+        try? session.overrideOutputAudioPort(speaker ? .speaker : .none)
 
-        let input = engine.inputNode
-        var vp = false
-        if useVoiceProcessing {
-            do {
-                try input.setVoiceProcessingEnabled(true)
-                vp = true
-            } catch {
-                print("[audio] voice processing unavailable: \(error)")
-            }
+        let useVP = Self.wantsVoiceProcessing && !Self.voiceProcessingFailed
+        do {
+            try buildEngine(voiceProcessing: useVP)
+        } catch where useVP {
+            print("[audio] engine with echo cancellation failed (\(error.localizedDescription)); retrying without")
+            Self.voiceProcessingFailed = true
+            try buildEngine(voiceProcessing: false)
         }
-
-        let inFormat = input.outputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
-            throw NSError(domain: "AudioIO", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
-        }
-        converter = AVAudioConverter(from: inFormat, to: sendFormat)
-        input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
-            self?.handleMic(buffer)
-        }
-
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: playFormat)
-        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
-            self?.meterOutput(buffer)
-        }
-        engine.prepare()
-        try engine.start()
-        player.play()
         running = true
-        info = "in \(Int(inFormat.sampleRate)) Hz × \(inFormat.channelCount) · echo cancel \(vp ? "on" : "off")\(halfDuplex ? " · half-duplex" : "")"
-        print("[audio] started: \(info)")
-
-        // Route changes / interruptions can stop the engine: bring it back instead of going silent.
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            self?.recover()
-        }
+        observe()
+        updateRoute()
+        print("[audio] started: \(info) · \(route)")
     }
 
     func stop() {
         guard running else { return }
         running = false
-        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers = []
+        teardownEngine()
+        clearPlayback()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        print("[audio] stopped (mic chunks \(micChunks), audio chunks \(outChunks), rebuilds \(rebuilds), out peak \(outputPeak))")
+    }
+
+    /// Speaker ↔ earpiece. `.defaultToSpeaker` would override the earpiece choice, so the category changes too.
+    /// If iOS reconfigures the hardware for it, the engine is rebuilt and queued speech replays.
+    func setSpeaker(_ on: Bool) {
+        wantsSpeaker = on
+        guard running else { return }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: categoryOptions)
+        try? session.overrideOutputAudioPort(on ? .speaker : .none)
+        updateRoute()
+        print("[audio] speaker \(on ? "on" : "off"): \(route)")
+    }
+
+    private var categoryOptions: AVAudioSession.CategoryOptions {
+        wantsSpeaker ? [.defaultToSpeaker, .allowBluetooth] : [.allowBluetooth]
+    }
+
+    /// Called a few times a second during the call: if the engine stopped or stopped rendering (iOS can do
+    /// that when it reconfigures audio), rebuild it so the agent can't go quiet for the rest of the call.
+    func checkHealth() {
+        guard running, !rebuildPending else { return }
+        lock.lock()
+        let now = CFAbsoluteTimeGetCurrent()
+        let sinceRender = now - lastRender
+        let shouldBePlaying = now < playbackEnd
+        lock.unlock()
+        if !(engine?.isRunning ?? false) {
+            scheduleRebuild("engine stopped")
+        } else if shouldBePlaying && sinceRender > 1.0 {
+            scheduleRebuild("output stalled")
+        }
+    }
+
+    // MARK: - Engine
+
+    private func buildEngine(voiceProcessing wantVP: Bool) throws {
+        teardownEngine()
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        let input = engine.inputNode
+        var vp = false
+        if wantVP {
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                vp = true
+            } catch {
+                print("[audio] echo cancellation unavailable: \(error.localizedDescription)")
+                Self.voiceProcessingFailed = true
+            }
+        }
+
+        let inFormat = input.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0,
+              let converter = AVAudioConverter(from: inFormat, to: sendFormat) else {
+            throw NSError(domain: "AudioIO", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
+        }
+        input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
+            self?.handleMic(buffer, converter: converter)
+        }
+
+        engine.attach(player)
+        let mixer = engine.mainMixerNode
+        engine.connect(player, to: mixer, format: playFormat)
+        mixer.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
+            self?.meterOutput(buffer)
+        }
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            mixer.removeTap(onBus: 0)
+            throw error
+        }
+        player.play()
+
+        self.engine = engine
+        self.player = player
+        voiceProcessing = vp
+        halfDuplex = !vp   // no echo cancellation: never let the agent hear (and answer) itself
+        lock.lock(); lastRender = CFAbsoluteTimeGetCurrent(); lock.unlock()
+        let out = engine.outputNode.outputFormat(forBus: 0)
+        info = "in \(Int(inFormat.sampleRate)) Hz × \(inFormat.channelCount) · out \(Int(out.sampleRate)) Hz × \(out.channelCount) · echo cancel \(vp ? "on" : "off")\(halfDuplex ? " · half-duplex" : "")"
+    }
+
+    private func teardownEngine() {
+        guard let engine else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.mainMixerNode.removeTap(onBus: 0)
-        player.stop()
+        player?.stop()
         engine.stop()
-        lock.lock(); playbackEnd = 0; itemStart = nil; lock.unlock()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        print("[audio] stopped (mic chunks \(micChunks), audio chunks \(outChunks))")
+        if let player { engine.detach(player) }
+        self.engine = nil
+        self.player = nil
     }
 
-    private func recover() {
+    private func scheduleRebuild(_ reason: String, delay: Double = 0.15) {
+        guard running, !rebuildPending else { return }
+        rebuildPending = true
+        // Coalesce the burst of notifications iOS sends for one change.
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.rebuildPending = false
+            self.rebuild(reason)
+        }
+    }
+
+    private func rebuild(_ reason: String) {
         guard running else { return }
-        print("[audio] engine configuration changed; restarting")
-        if !engine.isRunning { try? engine.start() }
-        player.play()
+        let now = CFAbsoluteTimeGetCurrent()
+        recentRebuilds = recentRebuilds.filter { now - $0 < 20 } + [now]
+        if recentRebuilds.count > 8 {
+            print("[audio] too many rebuilds; leaving the engine as is")
+            return
+        }
+        // Echo cancellation that keeps breaking on this device: fall back to the plain path.
+        if voiceProcessing && recentRebuilds.count >= 4 { Self.voiceProcessingFailed = true }
+        let useVP = Self.wantsVoiceProcessing && !Self.voiceProcessingFailed
+        rebuilds += 1
+        let pending = unplayedAudio()
+        do {
+            try buildEngine(voiceProcessing: useVP)
+        } catch {
+            print("[audio] rebuild failed (\(error.localizedDescription))")
+            if useVP {
+                Self.voiceProcessingFailed = true
+                try? buildEngine(voiceProcessing: false)
+            }
+        }
+        updateRoute()
+        replay(pending)
+        var replayedFrames = 0
+        for b in pending { replayedFrames += Int(b.frameLength) }
+        let replayed = String(format: "%.1f", Double(replayedFrames) / 24_000)
+        print("[audio] rebuilt (\(reason)): \(info) · \(route) · replayed \(replayed) s")
     }
 
-    func setSpeaker(_ on: Bool) {
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(on ? .speaker : .none)
+    // MARK: - Route
+
+    private func observe() {
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] note in
+            guard let self, let changed = note.object as? AVAudioEngine, changed === self.engine else { return }
+            self.scheduleRebuild("hardware changed")
+        })
+        observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.routeChanged()
+        })
+        observers.append(nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.scheduleRebuild("media services reset", delay: 0.5)
+        })
     }
+
+    private func routeChanged() {
+        guard running else { return }
+        updateRoute()
+        // iOS sometimes falls back to the earpiece; if the user wants the speaker, move back.
+        let session = AVAudioSession.sharedInstance()
+        if wantsSpeaker, session.currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
+            try? session.overrideOutputAudioPort(.speaker)
+            updateRoute()
+        }
+        print("[audio] route: \(route)")
+    }
+
+    private func updateRoute() {
+        let r = AVAudioSession.sharedInstance().currentRoute
+        let out = r.outputs.map(Self.portName).joined(separator: "+")
+        let inp = r.inputs.map(Self.portName).joined(separator: "+")
+        route = "out \(out.isEmpty ? "none" : out) · in \(inp.isEmpty ? "none" : inp)"
+    }
+
+    private static func portName(_ p: AVAudioSessionPortDescription) -> String {
+        switch p.portType {
+        case .builtInSpeaker: return "speaker"
+        case .builtInReceiver: return "earpiece"
+        case .builtInMic: return "mic"
+        case .headphones, .headsetMic: return "wired"
+        case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE: return "bluetooth(\(p.portName))"
+        case .carAudio: return "car"
+        case .airPlay: return "airplay"
+        default: return p.portName
+        }
+    }
+
+    // MARK: - Playback
 
     /// Queue a chunk of 24 kHz little-endian PCM16 from the model.
     func play(pcm16 data: Data) {
@@ -139,34 +322,99 @@ final class AudioIO {
             let src = raw.bindMemory(to: Int16.self)
             for i in 0..<frames { dst[i] = Float(Int16(littleEndian: src[i])) / 32768.0 }
         }
+        outChunks += 1
+        schedule(buffer, newItemAudio: true)
+    }
+
+    private func schedule(_ buffer: AVAudioPCMBuffer, newItemAudio: Bool) {
+        let frames = Int(buffer.frameLength)
         let duration = Double(frames) / 24_000
+        let levels = Self.windowLevels(buffer)
         lock.lock()
         let now = CFAbsoluteTimeGetCurrent()
         let startAt = max(now, playbackEnd)
-        if itemStart == nil { itemStart = startAt }
-        itemScheduledSeconds += duration
+        if newItemAudio {
+            if itemStart == nil { itemStart = startAt }
+            itemScheduledSeconds += duration
+        }
         playbackEnd = startAt + duration
+        queued.removeAll { $0.start + Double($0.buffer.frameLength) / 24_000 < now }
+        queued.append((startAt, buffer))
+        levelTimeline.removeAll { $0.at < now - 0.1 }
+        for (i, level) in levels.enumerated() { levelTimeline.append((startAt + Double(i) * 0.04, level)) }
         lock.unlock()
-        outChunks += 1
+        guard let player else { return }
         if !player.isPlaying { player.play() }
         player.scheduleBuffer(buffer, completionHandler: nil)
+    }
+
+    /// What was handed to the old engine but not heard yet (the first buffer trimmed to where it was).
+    private func unplayedAudio() -> [AVAudioPCMBuffer] {
+        lock.lock()
+        let now = CFAbsoluteTimeGetCurrent()
+        let items = queued
+        queued = []
+        levelTimeline = []
+        playbackEnd = 0
+        lock.unlock()
+        var out: [AVAudioPCMBuffer] = []
+        for item in items {
+            let total = Int(item.buffer.frameLength)
+            let playedFrames = max(0, Int((now - item.start) * 24_000))
+            guard playedFrames < total else { continue }
+            if playedFrames == 0 { out.append(item.buffer); continue }
+            let remaining = total - playedFrames
+            guard let copy = AVAudioPCMBuffer(pcmFormat: playFormat, frameCapacity: AVAudioFrameCount(remaining)),
+                  let src = item.buffer.floatChannelData?[0], let dst = copy.floatChannelData?[0] else { continue }
+            copy.frameLength = AVAudioFrameCount(remaining)
+            dst.update(from: src.advanced(by: playedFrames), count: remaining)
+            out.append(copy)
+        }
+        return out
+    }
+
+    private func replay(_ buffers: [AVAudioPCMBuffer]) {
+        for b in buffers { schedule(b, newItemAudio: false) }
     }
 
     /// Barge-in: drop everything queued right now.
     func stopPlayback() {
         guard running else { return }
-        player.stop()
-        lock.lock(); playbackEnd = 0; lock.unlock()
-        player.play()
+        player?.stop()
+        clearPlayback()
+        player?.play()
     }
 
-    private func handleMic(_ buffer: AVAudioPCMBuffer) {
+    private func clearPlayback() {
+        lock.lock()
+        playbackEnd = 0
+        itemStart = nil
+        itemScheduledSeconds = 0
+        queued = []
+        levelTimeline = []
+        lock.unlock()
+    }
+
+    /// Loudness of the audio being heard right now (0 when nothing plays).
+    private func playingLevel() -> Float {
+        lock.lock(); defer { lock.unlock() }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now < playbackEnd else { return 0 }
+        var level: Float = 0
+        for entry in levelTimeline where entry.at <= now { level = entry.level }
+        return level
+    }
+
+    // MARK: - Mic & meters
+
+    private func handleMic(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter) {
         let level = Self.rms(buffer)
         inputLevel = inputLevel * 0.6 + level * 0.4
-        onLevels?(inputLevel, outputLevel)
+        if inputLevel > inputPeak { inputPeak = inputLevel }
+        onLevels?(inputLevel, playingLevel())
 
-        guard !muted, !pauseMic, let converter else { return }
-        // Simulator has no echo cancellation: don't feed the agent its own voice (plus a short tail).
+        guard !muted, !pauseMic else { return }
+        // No echo cancellation: don't feed the agent its own voice (plus a short tail).
         if halfDuplex {
             lock.lock(); let busy = CFAbsoluteTimeGetCurrent() < playbackEnd + 0.35; lock.unlock()
             if busy { return }
@@ -194,7 +442,10 @@ final class AudioIO {
 
     private func meterOutput(_ buffer: AVAudioPCMBuffer) {
         let level = Self.rms(buffer)
-        outputLevel = outputLevel * 0.55 + level * 0.45
+        lock.lock()
+        lastRender = CFAbsoluteTimeGetCurrent()
+        if level > outputPeak { outputPeak = level }
+        lock.unlock()
     }
 
     private static func rms(_ buffer: AVAudioPCMBuffer) -> Float {
@@ -203,8 +454,27 @@ final class AudioIO {
         var sum: Float = 0
         var i = 0
         while i < n { sum += data[i] * data[i]; i += 2 }
-        let rms = sqrt(sum / Float(max(n / 2, 1)))
-        // Map roughly -50 dB…-5 dB to 0…1.
+        return loudness(sqrt(sum / Float(max(n / 2, 1))))
+    }
+
+    /// RMS every 40 ms of a 24 kHz buffer, mapped to 0…1.
+    private static func windowLevels(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        guard let data = buffer.floatChannelData?[0] else { return [] }
+        let n = Int(buffer.frameLength)
+        var levels: [Float] = []
+        var i = 0
+        while i < n {
+            let m = min(960, n - i)
+            var sum: Float = 0
+            for k in 0..<m { let v = data[i + k]; sum += v * v }
+            levels.append(loudness(sqrt(sum / Float(max(m, 1)))))
+            i += 960
+        }
+        return levels
+    }
+
+    /// Map roughly -50 dB…-5 dB to 0…1.
+    private static func loudness(_ rms: Float) -> Float {
         let db = 20 * log10(max(rms, 0.000_01))
         return min(max((db + 50) / 45, 0), 1)
     }

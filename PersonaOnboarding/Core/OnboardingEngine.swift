@@ -330,7 +330,7 @@ public final class OnboardingEngine {
                 state.gmailPromptCount += 1
                 state.profile.declined.remove(.gmail)
                 effects.append(.showGmailConnect)
-                result["note"] = "A Connect Gmail button is now on the user's screen. Tell them to tap it. Don't ask for passwords or codes. You'll get a system message when it's connected."
+                result["note"] = "A Connect Gmail button is now on the user's screen. Tell them to tap it. Don't ask for passwords or codes. The app tells you privately when it's connected; never mention that."
             }
         case "mark_declined":
             if let what = (args["what"] as? String).flatMap(Field.init(rawValue:)), what != .agentName {

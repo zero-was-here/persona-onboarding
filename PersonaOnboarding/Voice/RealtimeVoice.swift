@@ -37,6 +37,10 @@ final class RealtimeVoice {
     func setSpeaker(_ on: Bool) {
         speakerOn = on
         audio.setSpeaker(on)
+        // Speakerphone picks up the room: switch the server's noise filter to match.
+        if status == .live || status == .ending {
+            send(["type": "session.update", "session": ["type": "realtime", "audio": ["input": inputAudioConfig(transcriptionPrompt: transcriptionPrompt)]]])
+        }
     }
 
     var onEvent: ((Event) -> Void)?
@@ -75,6 +79,7 @@ final class RealtimeVoice {
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var eventsReceived = 0
     @ObservationIgnored private var apiKey = ""
+    @ObservationIgnored private var transcriptionPrompt = ""
     private(set) var simulatingCaller = false
     /// Autopilot mode: the real microphone is replaced by silence plus the caller's synthetic speech,
     /// so room noise around the Mac/iPhone can't hold the turn open.
@@ -89,6 +94,7 @@ final class RealtimeVoice {
     func start(apiKey: String, instructions: String, tools: [[String: Any]], transcriptionPrompt: String = "") {
         guard status == .idle else { return }
         self.apiKey = apiKey
+        self.transcriptionPrompt = transcriptionPrompt
         generation += 1
         let gen = generation
         status = .connecting
@@ -154,21 +160,27 @@ final class RealtimeVoice {
     }
 
     /// Input side of the session. The transcription prompt gives the caption model context (names!).
+    /// Noise reduction runs before turn detection: far-field on speakerphone (the phone is at arm's length,
+    /// hearing the room), near-field on the earpiece or a headset. Fewer false "the user spoke" triggers.
     private func inputAudioConfig(transcriptionPrompt: String) -> [String: Any] {
         var transcription: [String: Any] = ["model": transcriptionModel]
         if !transcriptionPrompt.isEmpty { transcription["prompt"] = transcriptionPrompt }
+        let farField = speakerOn && !audio.hasHeadset
         return [
             "format": ["type": "audio/pcm", "rate": 24_000],
             "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": true, "interrupt_response": true],
             "transcription": transcription,
-            "noise_reduction": ["type": "near_field"],
+            "noise_reduction": ["type": farField ? "far_field" : "near_field"],
         ]
     }
 
     func updateInstructions(_ instructions: String, transcriptionPrompt: String? = nil) {
         guard status == .live || status == .connecting else { return }
         var session: [String: Any] = ["type": "realtime", "instructions": instructions]
-        if let transcriptionPrompt { session["audio"] = ["input": inputAudioConfig(transcriptionPrompt: transcriptionPrompt)] }
+        if let transcriptionPrompt {
+            self.transcriptionPrompt = transcriptionPrompt
+            session["audio"] = ["input": inputAudioConfig(transcriptionPrompt: transcriptionPrompt)]
+        }
         send(["type": "session.update", "session": session])
     }
 
@@ -340,9 +352,8 @@ final class RealtimeVoice {
             }
         }
         do {
-            try audio.start()
+            try audio.start(speaker: speakerOn)
             audio.muted = isMuted
-            audio.setSpeaker(speakerOn)
         } catch {
             finish(.failed, error: "Audio: \(error.localizedDescription)")
             return
@@ -376,9 +387,10 @@ final class RealtimeVoice {
     }
 
     private func tick() {
+        if status == .live || status == .ending { audio.checkHealth() }
         let playing = audio.isPlaying
         assistantSpeaking = playing
-        diagnostics = "\(audio.info) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
+        diagnostics = "\(audio.info) · \(audio.route) · out peak \(String(format: "%.2f", audio.outputPeak)) · mic peak \(String(format: "%.2f", audio.inputPeak)) · rebuilds \(audio.rebuilds) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
         if playing || userSpeaking || responseActive { lastActivity = Date() }
 
         if let reason = pendingHangUp {
@@ -534,8 +546,14 @@ final class RealtimeVoice {
         case "response.output_item.added":
             if let item = obj["item"] as? [String: Any], item["type"] as? String == "message" {
                 currentAssistantItem = item["id"] as? String
+                // The previous line may still be playing (a follow-up right after a tool call): keep its
+                // caption on screen and continue after it, instead of wiping words the user hasn't heard yet.
+                if audio.isPlaying, !assistantCaption.isEmpty {
+                    assistantCaption += " "
+                } else {
+                    assistantCaption = ""
+                }
                 audio.resetPlayedCounter()
-                assistantCaption = ""
             }
 
         case "response.output_audio.delta":

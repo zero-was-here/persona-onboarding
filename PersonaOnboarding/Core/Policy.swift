@@ -104,7 +104,7 @@ public enum Policy {
         case .helpNeed: return "Say in a few words what you can do (two or three concrete things, like sorting their inbox, keeping their calendar in check, or drafting replies), then ask what they'd like to start with; when they answer, give one concrete example of how you'll help."
         case .gmail:
             return s.gmailCardVisible
-                ? "The Connect Gmail button is on their screen. Wait for them to tap it without repeating yourself; you'll get a system message when it's connected. If they say it's done but no message came, ask them to tap it once more. If they refuse, call mark_declined."
+                ? "The Connect Gmail button is on their screen. Wait for them to tap it without repeating yourself; the app tells you privately when it's connected (never mention that). If they say it's done but you haven't been told, ask them to tap it once more. If they refuse, call mark_declined."
                 : "Ask them to connect Gmail: call show_gmail_connect so a button appears on their screen."
         }
     }

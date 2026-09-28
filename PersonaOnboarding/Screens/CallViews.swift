@@ -101,15 +101,19 @@ struct CallView: View {
                 .padding(.top, 8)
 
                 Spacer(minLength: 12)
+                // The ring answers the user's voice; the orb swells with the agent's voice and, more gently,
+                // with the user's (so it visibly listens). Mic level has a small noise floor removed.
+                let userVoice = max(0, (voice.userLevel - 0.12) / 0.88)
                 ZStack {
-                    WaveRing(level: voice.userSpeaking ? voice.userLevel : voice.userLevel * 0.3, diameter: 236)
-                    AgentOrb(size: 236, level: max(voice.assistantLevel, voice.userLevel * 0.35), mood: model.callOrbMood)
+                    WaveRing(level: userVoice, diameter: 236)
+                    AgentOrb(size: 236, level: max(voice.assistantLevel, userVoice * 0.7), mood: model.callOrbMood)
                 }
-                Spacer(minLength: 12)
+                .frame(height: 290)
+                Spacer(minLength: 8)
 
                 Captions(assistant: voice.assistantCaption, userSpeaking: voice.userSpeaking)
-                    .frame(height: 96)
-                    .padding(.horizontal, 28)
+                    .frame(height: 118)
+                    .padding(.horizontal, 26)
 
                 if model.state.gmailCardVisible && model.state.profile.gmail == nil {
                     GmailInlineCard(agentName: model.agentName) { model.showGmailSheet = true }
@@ -238,22 +242,32 @@ struct ProgressConstellation: View {
 
 /// The agent's words (its exact output, so always right). The user's own speech isn't echoed back:
 /// speech-to-text can mishear any word, and the agent's reply already shows what it understood.
+/// Never cut with "…": the text shrinks a little to fit, and if the agent says a lot, whole older
+/// sentences make room for the newest ones.
 struct Captions: View {
     let assistant: String
     let userSpeaking: Bool
 
     var body: some View {
-        Text(tail(assistant, 120))
-            .font(Typo.sans(19, .medium))
+        Text(Self.visible(assistant))
+            .font(Typo.sans(18, .medium))
             .foregroundStyle(Theme.ink.opacity(userSpeaking ? 0.45 : 0.95))
             .multilineTextAlignment(.center)
-            .lineLimit(3)
-            .frame(maxWidth: .infinity)
-            .contentTransition(.opacity)
+            .lineLimit(5)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(Motion.snappy, value: userSpeaking)
     }
 
-    private func tail(_ s: String, _ n: Int) -> String {
-        s.count > n ? "…" + String(s.suffix(n)) : s
+    /// The most recent whole sentences that fit in about `limit` characters.
+    static func visible(_ s: String, limit: Int = 200) -> String {
+        let text = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count > limit else { return text }
+        let tail = text.suffix(limit)
+        if let boundary = tail.range(of: #"[.!?…。؟]\s+"#, options: .regularExpression) {
+            return String(tail[boundary.upperBound...])
+        }
+        if let space = tail.firstIndex(of: " ") { return String(tail[tail.index(after: space)...]) }
+        return String(tail)
     }
 }

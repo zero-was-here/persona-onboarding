@@ -78,11 +78,11 @@ final class OrbMotion {
         last = date
         // Envelope follower: quick to rise with a syllable, slow to fall, like a VU meter.
         let t = Double(target)
-        let tau = t > level ? 0.07 : 0.32
+        let tau = t > level ? 0.05 : 0.24
         level += (t - level) * (1 - exp(-dt / tau))
-        energy += (Double(targetEnergy) - energy) * (1 - exp(-dt / 0.45))
+        energy += (Double(targetEnergy) - energy) * (1 - exp(-dt / 0.4))
         excited += ((isExcited ? 1 : 0) - excited) * (1 - exp(-dt / 0.5))
-        flow += dt * (0.08 + energy * 0.16 + level * 0.12)
+        flow += dt * (0.08 + energy * 0.16 + level * 0.3)
         let time = date.timeIntervalSince(AnimationClock.epoch).truncatingRemainder(dividingBy: 3600)
         return Frame(time: Float(time), flow: Float(flow.truncatingRemainder(dividingBy: 1000)),
                      level: Float(level), energy: Float(energy), excited: Float(excited))
@@ -109,7 +109,7 @@ struct OrbEyes: View {
         let tall = mood == .listening ? 1.14 : 1.0
         let gazeX = CGFloat(sin(t * 0.55)) * size * 0.02 + (mood == .thinking ? size * 0.035 : 0)
         let gazeY = (mood == .thinking ? -size * 0.035 : CGFloat(cos(t * 0.4)) * size * 0.006)
-            - (mood == .speaking ? CGFloat(level) * size * 0.02 : 0)
+            - (mood == .speaking ? CGFloat(level) * size * 0.04 : 0)
         let w = size * 0.072
         let h = size * 0.135 * tall
 
@@ -168,7 +168,8 @@ struct PulseRings: View {
     }
 }
 
-/// Soft radial bars around the orb that swell with the voice (smoothed so they never flicker).
+/// Radial bars around the orb that swell with the user's voice (smoothed so they never flicker).
+/// Drawn just outside the orb's largest swell; the view is larger than its layout slot on purpose.
 struct WaveRing: View {
     var level: Float
     var diameter: CGFloat
@@ -176,28 +177,28 @@ struct WaveRing: View {
     @State private var motion = OrbMotion()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
             let f = motion.step(date: ctx.date, level: min(max(level, 0), 1), energy: 0.4, excited: false)
             let t = Double(f.time)
             Canvas { gc, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 let bars = 72
-                let inner = diameter / 2
+                let inner = diameter / 2 + 18
                 let lvl = CGFloat(f.level)
                 for i in 0..<bars {
                     let a = Double(i) / Double(bars) * .pi * 2
-                    let wobble = (sin(a * 3 + t * 1.2) + sin(a * 5 - t * 1.7)) * 0.25 + 0.5
-                    let len = 2 + lvl * 18 * CGFloat(wobble)
+                    let wobble = (sin(a * 3 + t * 1.6) + sin(a * 5 - t * 2.1)) * 0.25 + 0.5
+                    let len = 2 + lvl * 34 * CGFloat(0.35 + 0.65 * wobble)
                     let p1 = CGPoint(x: center.x + cos(a) * inner, y: center.y + sin(a) * inner)
                     let p2 = CGPoint(x: center.x + cos(a) * (inner + len), y: center.y + sin(a) * (inner + len))
                     var path = Path()
                     path.move(to: p1)
                     path.addLine(to: p2)
-                    gc.stroke(path, with: .color(color.opacity(0.12 + 0.35 * Double(lvl))), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    gc.stroke(path, with: .color(color.opacity(0.10 + 0.65 * Double(lvl))), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
                 }
             }
         }
-        .frame(width: diameter + 70, height: diameter + 70)
+        .frame(width: diameter + 120, height: diameter + 120)
         .allowsHitTesting(false)
     }
 }
