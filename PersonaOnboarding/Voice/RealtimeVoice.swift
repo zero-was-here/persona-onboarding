@@ -76,6 +76,11 @@ final class RealtimeVoice {
     @ObservationIgnored private var eventsReceived = 0
     @ObservationIgnored private var apiKey = ""
     private(set) var simulatingCaller = false
+    /// Autopilot mode: the real microphone is replaced by silence plus the caller's synthetic speech,
+    /// so room noise around the Mac/iPhone can't hold the turn open.
+    @ObservationIgnored private var syntheticMic = false
+    @ObservationIgnored private var callerStreaming = false
+    @ObservationIgnored private var silenceTask: Task<Void, Never>?
     /// While a reviewer has the Tester panel open, don't hang up on them for being quiet.
     var suspendSilenceCheck = false
 
@@ -196,7 +201,8 @@ final class RealtimeVoice {
         simulatingCaller = true
         defer {
             simulatingCaller = false
-            audio.pauseMic = false
+            callerStreaming = false
+            audio.pauseMic = syntheticMic
             lastActivity = Date()
         }
         var problem = "unknown"
@@ -221,6 +227,7 @@ final class RealtimeVoice {
                     continue
                 }
                 audio.pauseMic = true
+                callerStreaming = true
                 var pending: [UInt8] = []
                 pending.reserveCapacity(9_600)
                 var nextSend = Date()
@@ -254,6 +261,27 @@ final class RealtimeVoice {
         }
         lastError = "Simulated caller: TTS failed (\(problem))"
         return false
+    }
+
+    /// Tester autopilot: swap the microphone for a clean synthetic line (silence between the caller's lines).
+    func setSyntheticMic(_ on: Bool) {
+        syntheticMic = on
+        audio.pauseMic = on || callerStreaming
+        silenceTask?.cancel()
+        silenceTask = nil
+        guard on else { return }
+        let gen = generation
+        silenceTask = Task { [weak self] in
+            let silence = Data(count: 4_800).base64EncodedString()   // 100 ms of 24 kHz PCM16
+            var next = Date()
+            while !Task.isCancelled {
+                guard let self, self.generation == gen, self.syntheticMic else { return }
+                await self.paceAudio(&next)
+                if (self.status == .live || self.status == .ending) && !self.callerStreaming {
+                    self.send(["type": "input_audio_buffer.append", "audio": silence])
+                }
+            }
+        }
     }
 
     private func paceAudio(_ next: inout Date) async {
@@ -387,6 +415,11 @@ final class RealtimeVoice {
 
     private func teardown() {
         generation += 1
+        syntheticMic = false
+        callerStreaming = false
+        silenceTask?.cancel()
+        silenceTask = nil
+        audio.pauseMic = false
         if let o = interruptionObserver { NotificationCenter.default.removeObserver(o); interruptionObserver = nil }
         watchdog?.cancel()
         watchdog = nil

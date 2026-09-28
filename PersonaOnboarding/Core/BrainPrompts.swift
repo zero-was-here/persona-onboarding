@@ -31,7 +31,7 @@ public enum BrainPrompts {
     /// Honest answers for privacy questions (kept in sync with the Gmail connect screen).
     public static let privacyFacts = """
     PRIVACY FACTS (answer privacy questions in 1–2 short sentences using only these):
-    - Connecting Gmail lets you read their emails to sort them and draft replies they approve before anything is sent. You never send on your own.
+    - Connecting Gmail lets you read the emails in their inbox (all of them, so you can sort everything) and draft replies they approve before anything is sent. You never send on your own.
     - Their email data is stored encrypted, used only to help them, never sold or shared, and deleted when they disconnect or ask.
     - This build is a prototype: the Gmail sign-in is simulated, so nothing is actually read yet. Say this only if they ask whether it's real or what happens right now.
     """

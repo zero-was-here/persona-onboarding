@@ -19,6 +19,49 @@ struct TesterPanel: View {
                     }
                     .padding(.top, 20)
 
+                    section("Autopilot caller") {
+                        Text("Starts a fresh onboarding where an AI caller talks to the agent through the real app: it listens, answers out loud (OpenAI TTS into the voice pipeline), taps Gmail, and continues by text if the call ends.")
+                            .font(Typo.sans(13)).foregroundStyle(Theme.muted)
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                            ForEach(AutopilotCaller.personas) { p in
+                                Button {
+                                    model.showTester = false
+                                    model.autopilot.start(p)
+                                } label: {
+                                    Text(p.title)
+                                        .font(Typo.sans(13, .medium))
+                                        .foregroundStyle(Theme.ink)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .frame(maxWidth: .infinity, minHeight: 38)
+                                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                                        .overlay(Capsule().strokeBorder(Theme.hairline))
+                                }
+                                .buttonStyle(PressScale())
+                                .disabled(model.autopilot.running != nil)
+                                .opacity(model.autopilot.running != nil ? 0.4 : 1)
+                                .accessibilityLabel("Autopilot: \(p.title)")
+                            }
+                        }
+                        if let p = model.autopilot.running {
+                            HStack {
+                                Label("Running: \(p.title)", systemImage: "waveform.circle")
+                                    .font(Typo.sans(15, .medium)).foregroundStyle(Theme.aqua)
+                                Spacer()
+                                Button("Stop") { model.autopilot.stop() }
+                                    .font(Typo.sans(14, .semibold)).foregroundStyle(Theme.danger)
+                            }
+                        }
+                        if model.autopilot.log.count > 1 {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(Array(model.autopilot.log.suffix(16).enumerated()), id: \.offset) { _, line in
+                                    Text(line).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+
                     section("Live state") {
                         row("Agent name", model.state.profile.agentName, declined: false)
                         row("Your name", model.state.profile.userName, declined: model.state.profile.declined.contains(.userName))
@@ -45,36 +88,6 @@ struct TesterPanel: View {
                             model.skip()
                         }
                         action("Restart onboarding", icon: "arrow.counterclockwise", enabled: true, destructive: true) { model.reset() }
-                    }
-
-                    section("Autopilot caller") {
-                        Text("Starts a fresh onboarding where an AI caller talks to the agent end to end through the real app: it listens, answers out loud (OpenAI TTS into the mic path), taps Gmail, and continues by text if the call ends.")
-                            .font(Typo.sans(13)).foregroundStyle(Theme.muted)
-                        if let p = model.autopilot.running {
-                            HStack {
-                                Label("Running: \(p.title)", systemImage: "waveform.circle")
-                                    .font(Typo.sans(15, .medium)).foregroundStyle(Theme.aqua)
-                                Spacer()
-                                Button("Stop") { model.autopilot.stop() }
-                                    .font(Typo.sans(14, .semibold)).foregroundStyle(Theme.danger)
-                            }
-                        }
-                        if model.autopilot.log.count > 1 {
-                            VStack(alignment: .leading, spacing: 3) {
-                                ForEach(Array(model.autopilot.log.suffix(16).enumerated()), id: \.offset) { _, line in
-                                    Text(line).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                        } else {
-                            Text(model.autopilot.status).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
-                        }
-                        ForEach(AutopilotCaller.personas) { p in
-                            action(p.title, icon: "person.wave.2", enabled: model.autopilot.running == nil) {
-                                model.showTester = false
-                                model.autopilot.start(p)
-                            }
-                        }
                     }
 
                     if model.voice.status == .live {

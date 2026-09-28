@@ -5,7 +5,7 @@ import Foundation
 /// clearly dominant, and nil when there isn't enough signal (keep whatever we had).
 public enum LanguageGuess {
     private static let markers: [(String, Set<String>)] = [
-        ("French", ["je", "j'ai", "tu", "vous", "est", "et", "le", "la", "les", "des", "pour", "avec", "mes", "mon", "ma", "bonjour", "salut", "oui", "merci", "appelle", "m'appelle", "aide", "rendez-vous", "c'est", "pas", "suis", "voudrais", "j'aimerais", "moi", "gérer", "ouais", "d'accord"]),
+        ("French", ["je", "j'ai", "tu", "vous", "est", "et", "le", "la", "les", "des", "pour", "avec", "mes", "mon", "ma", "bonjour", "salut", "oui", "merci", "appelle", "m'appelle", "aide", "rendez", "c'est", "pas", "suis", "voudrais", "j'aimerais", "moi", "gérer", "ouais", "d'accord", "toi", "ça", "très", "bien", "aussi", "mais"]),
         ("Spanish", ["hola", "yo", "soy", "quiero", "necesito", "gracias", "mis", "por", "para", "llamo", "ayuda", "correo", "sí", "los", "las", "una", "que", "está", "bueno", "vale"]),
         ("German", ["ich", "bin", "heiße", "und", "nicht", "danke", "hallo", "bitte", "meine", "mein", "hilfe", "der", "die", "das", "ist", "ja", "genau"]),
         ("Portuguese", ["olá", "oi", "eu", "sou", "quero", "preciso", "obrigado", "obrigada", "meu", "minha", "ajuda", "chamo", "você", "não", "tudo", "bem"]),
@@ -17,7 +17,7 @@ public enum LanguageGuess {
         if text.unicodeScalars.contains(where: { (0x0600...0x06FF).contains($0.value) }) { return "Arabic" }
         let words = text.lowercased()
             .replacingOccurrences(of: "’", with: "'")
-            .split(whereSeparator: { !$0.isLetter && $0 != "'" && $0 != "-" })
+            .split(whereSeparator: { !$0.isLetter && $0 != "'" })
             .map(String.init)
         guard words.count >= 2 else { return nil }
         let en = words.filter(english.contains).count

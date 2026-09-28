@@ -212,6 +212,7 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(LanguageGuess.guess("مرحبا انا يوسف"), "Arabic")
         XCTAssertEqual(LanguageGuess.guess("I need help with my inbox please"), "English")
         XCTAssertNil(LanguageGuess.guess("Sam"))
+        XCTAssertEqual(LanguageGuess.guess("Youssef, appelle-moi Youssef."), "French")
         let e = engine()
         e.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Zaki")))
         e.handle(.callAnswered)

@@ -96,6 +96,8 @@ final class AutopilotCaller {
             return
         }
         note("on the call")
+        model.voice.setSyntheticMic(true)
+        defer { model.voice.setSyntheticMic(false) }
 
         // 2. Voice turns. Answer each new agent line once the agent has really finished talking.
         //    (Keyed on the latest *assistant* line, so a caption that lands late can't stall the loop.)
@@ -109,8 +111,11 @@ final class AutopilotCaller {
             try? await Task.sleep(for: .milliseconds(400))
             if p.connectsGmail, !gmailTapped, model.state.gmailCardVisible, model.state.profile.gmail == nil {
                 gmailTapped = true
-                // Like a person: let the agent finish telling you about the button, then tap it.
-                _ = await waitFor(20, { !model.voice.assistantSpeaking && !model.voice.isResponding })
+                // Like a person: let the agent tell you about the button (its next line), then tap it.
+                let before = latestAgentLine()?.id
+                _ = await waitFor(20, {
+                    latestAgentLine()?.id != before && !model.voice.assistantSpeaking && !model.voice.isResponding
+                })
                 try? await Task.sleep(for: .milliseconds(1200))
                 note("taps Connect Gmail")
                 model.connectGmail("\(p.id)@gmail.com")
