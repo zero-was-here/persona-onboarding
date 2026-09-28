@@ -1,0 +1,15 @@
+# Xcode
+DerivedData/
+DerivedData.nosync/
+xcuserdata/
+*.xcuserstate
+build/
+# SwiftPM
+.build/
+.swiftpm/
+# Secrets (never commit)
+PersonaOnboarding/Secrets.json
+# Local sync bundles / reports
+.sync/
+stress-results/
+node_modules/
