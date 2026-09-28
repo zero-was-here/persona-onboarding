@@ -223,6 +223,8 @@ final class AppModel {
         ringTask?.cancel()
         brainTask?.cancel()
         brainTask = nil
+        brainQueued = false
+        queuedNote = nil
         isThinking = false
         SoundFX.shared.stopRinging()
         ringVisible = false

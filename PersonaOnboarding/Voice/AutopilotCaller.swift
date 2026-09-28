@@ -38,13 +38,18 @@ final class AutopilotCaller {
 
     init(model: AppModel) { self.model = model }
 
+    /// Every run starts from a fresh onboarding, so results are comparable run to run.
     func start(_ persona: Persona) {
         stop()
+        model?.reset()
         running = persona
         turns = 0
         log = ["▶︎ \(persona.title)"]
         status = "starting…"
-        loop = Task { [weak self] in await self?.run(persona) }
+        loop = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            await self?.run(persona)
+        }
     }
 
     func stop() {
@@ -92,9 +97,14 @@ final class AutopilotCaller {
         }
         note("on the call")
 
-        // 2. Voice turns.
+        // 2. Voice turns. Answer each new agent line once the agent has really finished talking.
+        //    (Keyed on the latest *assistant* line, so a caption that lands late can't stall the loop.)
         var lastHandled: UUID?
         var gmailTapped = false
+        var lastProgress = Date()
+        func latestAgentLine() -> Message? {
+            model.state.transcript.last(where: { $0.channel == .voice && $0.role == .assistant })
+        }
         while !Task.isCancelled, model.callVisible, turns < 14 {
             try? await Task.sleep(for: .milliseconds(400))
             if p.connectsGmail, !gmailTapped, model.state.gmailCardVisible, model.state.profile.gmail == nil {
@@ -105,42 +115,52 @@ final class AutopilotCaller {
                 continue
             }
             let v = model.voice
-            guard !v.assistantSpeaking, !v.isResponding, !v.simulatingCaller else { continue }
-            guard let last = model.state.transcript.last(where: { $0.channel == .voice && $0.role != .event }),
-                  last.role == .assistant, last.id != lastHandled else { continue }
+            if Date().timeIntervalSince(lastProgress) > 45 { note("⚠︎ call stalled for 45 s"); break }
+            guard v.status == .live, !v.assistantSpeaking, !v.isResponding, !v.simulatingCaller else { continue }
+            guard let last = latestAgentLine(), last.id != lastHandled else { continue }
             // Let the agent really finish (tool follow-ups can arrive right after a sentence).
             try? await Task.sleep(for: .milliseconds(900))
-            guard !v.assistantSpeaking, !v.isResponding, model.callVisible,
-                  model.state.transcript.last(where: { $0.channel == .voice && $0.role != .event })?.id == last.id else { continue }
+            guard v.status == .live, !v.assistantSpeaking, !v.isResponding, model.callVisible,
+                  latestAgentLine()?.id == last.id else { continue }
             lastHandled = last.id
+            lastProgress = Date()
             guard let reply = await nextLine(p, channel: "a phone call") else { note("brain error"); break }
-            guard !Task.isCancelled, model.callVisible else { break }
+            guard !Task.isCancelled, model.callVisible, model.voice.status == .live else { continue }
             turns += 1
             note("🗣 \(reply)")
-            await model.voice.speakAsCaller(reply, voice: p.voice)
+            let spoke = await model.voice.speakAsCaller(reply, voice: p.voice)
+            if !spoke, model.voice.status == .live {
+                note("⚠︎ \(model.voice.lastError ?? "TTS failed"); sent as text instead")
+                model.voice.sendCallerText(reply)
+            }
+            lastProgress = Date()
         }
 
         // 3. If the call ended but onboarding isn't done, keep going by text like a real person would.
         var textTurns = 0
         var lastText: UUID?
+        lastProgress = Date()
         while !Task.isCancelled, running != nil, model.state.phase != .graduated, textTurns < 8 {
             try? await Task.sleep(for: .milliseconds(500))
-            if model.callVisible || model.incomingCallVisible { continue }
+            if model.callVisible || model.incomingCallVisible { lastProgress = Date(); continue }
             if p.connectsGmail, model.state.gmailCardVisible, model.state.profile.gmail == nil {
                 try? await Task.sleep(for: .seconds(1))
                 note("taps Connect Gmail")
                 model.connectGmail("\(p.id)@gmail.com")
+                lastProgress = Date()
                 continue
             }
+            if Date().timeIntervalSince(lastProgress) > 40 { note("⚠︎ no text reply for 40 s"); break }
             guard !model.isThinking, let last = model.state.transcript.last(where: { $0.role != .event }),
-                  last.role == .assistant, last.id != lastText else { continue }
+                  last.role == .assistant, last.channel == .text, last.id != lastText else { continue }
             lastText = last.id
             guard let reply = await nextLine(p, channel: "a text chat") else { break }
             textTurns += 1
             note("💬 \(reply)")
             model.send(reply)
+            lastProgress = Date()
         }
-        note(model.state.phase == .graduated ? "✓ done: graduated" : "✓ done")
+        note(model.state.phase == .graduated ? "✓ done: graduated" : "✓ done (\(model.state.phase))")
         running = nil
     }
 

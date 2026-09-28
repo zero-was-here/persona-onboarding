@@ -48,7 +48,7 @@ struct TesterPanel: View {
                     }
 
                     section("Autopilot caller") {
-                        Text("An AI caller talks to the agent end to end through the real app: it listens, answers out loud (OpenAI TTS into the mic path), taps Gmail, and continues by text if the call ends.")
+                        Text("Starts a fresh onboarding where an AI caller talks to the agent end to end through the real app: it listens, answers out loud (OpenAI TTS into the mic path), taps Gmail, and continues by text if the call ends.")
                             .font(Typo.sans(13)).foregroundStyle(Theme.muted)
                         if let p = model.autopilot.running {
                             HStack {
@@ -59,9 +59,18 @@ struct TesterPanel: View {
                                     .font(Typo.sans(14, .semibold)).foregroundStyle(Theme.danger)
                             }
                         }
-                        Text(model.autopilot.status).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
+                        if model.autopilot.log.count > 1 {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(Array(model.autopilot.log.suffix(16).enumerated()), id: \.offset) { _, line in
+                                    Text(line).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        } else {
+                            Text(model.autopilot.status).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
+                        }
                         ForEach(AutopilotCaller.personas) { p in
-                            action(p.title, icon: "person.wave.2", enabled: model.autopilot.running == nil && model.state.phase != .graduated) {
+                            action(p.title, icon: "person.wave.2", enabled: model.autopilot.running == nil) {
                                 model.showTester = false
                                 model.autopilot.start(p)
                             }

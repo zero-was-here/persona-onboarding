@@ -113,6 +113,8 @@ public struct CallInfo: Codable, Equatable, Sendable {
     public var lastEnd: CallEndReason?
     public var connectedAt: Date?
     public var lastDuration: TimeInterval = 0
+    /// Last moment the call showed signs of life (for honest durations when the app was killed mid-call).
+    public var lastAliveAt: Date?
     /// The user told us they don't want calls. Only call again if they ask.
     public var userPrefersText = false
     public init() {}

@@ -183,4 +183,27 @@ final class EngineTests: XCTestCase {
         e.handle(.start)
         XCTAssertTrue(e.state.transcript.first?.text.hasPrefix("Salut") == true)
     }
+    func testCallRestoredAfterAppKillUsesLastSignOfLife() {
+        var clock = Date(timeIntervalSince1970: 1_000_000)
+        let e = OnboardingEngine(now: { clock })
+        e.handle(.start)
+        e.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Kai")))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        clock += 40
+        e.handle(.voiceTranscript(role: .user, text: "I'm Sam"))
+        // App killed; relaunched ten minutes later and the call is reported as dropped.
+        clock += 600
+        e.handle(.callEnded(.dropped))
+        XCTAssertEqual(e.state.call.lastDuration, 42, accuracy: 0.5)
+        // A normal call that ends while live keeps its real duration.
+        let f = OnboardingEngine(now: { clock })
+        f.handle(.start)
+        f.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Kai")))
+        f.handle(.callAnswered)
+        f.handle(.callConnected)
+        clock += 30
+        f.handle(.callEnded(.silence))
+        XCTAssertEqual(f.state.call.lastDuration, 30, accuracy: 0.5)
+    }
 }

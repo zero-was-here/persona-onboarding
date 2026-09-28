@@ -171,39 +171,94 @@ final class RealtimeVoice {
         Task { await speakAsCaller(text) }
     }
 
-    func speakAsCaller(_ text: String, voice ttsVoice: String = "ash") async {
-        guard status == .live, !simulatingCaller else { return }
+    /// Separate from URLSession.shared so a stale pooled connection can't break the caller's voice.
+    private static let ttsSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
+
+    /// Streams the TTS audio into the input buffer as it arrives (like a live microphone), with retries.
+    /// Returns false if no audio could be produced, so the caller can fall back to text.
+    @discardableResult
+    func speakAsCaller(_ text: String, voice ttsVoice: String = "ash") async -> Bool {
+        guard status == .live, !simulatingCaller else { return false }
         simulatingCaller = true
         defer {
             simulatingCaller = false
             audio.pauseMic = false
             lastActivity = Date()
         }
-        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/speech")!)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 20
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "model": "gpt-4o-mini-tts", "voice": ttsVoice, "input": text, "response_format": "pcm",
-        ])
-        guard let (pcm, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200, pcm.count > 0 else {
-            lastError = "Simulated caller: TTS failed"
-            return
+        var problem = "unknown"
+        for attempt in 1...3 {
+            guard status == .live else { return false }
+            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/speech")!)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "model": "gpt-4o-mini-tts", "voice": ttsVoice, "input": text, "response_format": "pcm",
+                "instructions": "A regular person talking on a phone call: natural, relaxed, conversational.",
+            ])
+            var sent = 0
+            do {
+                let (bytes, resp) = try await Self.ttsSession.bytes(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard code == 200 else {
+                    problem = "HTTP \(code)"
+                    if code == 400 || code == 401 || code == 403 { break }
+                    try? await Task.sleep(for: .milliseconds(700 * attempt))
+                    continue
+                }
+                audio.pauseMic = true
+                var pending: [UInt8] = []
+                pending.reserveCapacity(9_600)
+                var nextSend = Date()
+                for try await byte in bytes {
+                    pending.append(byte)
+                    if pending.count >= 4_800 {   // 100 ms of 24 kHz PCM16, sent in real time
+                        guard status == .live else { return sent > 0 }
+                        await paceAudio(&nextSend)
+                        send(["type": "input_audio_buffer.append", "audio": Data(pending[0..<4_800]).base64EncodedString()])
+                        pending.removeFirst(4_800)
+                        sent += 1
+                        lastActivity = Date()
+                    }
+                }
+                // The tail, then ~1.2 s of silence so turn detection ends the caller's turn.
+                let tail = pending + [UInt8](repeating: 0, count: 24_000 * 2 * 12 / 10)
+                var i = 0
+                while i < tail.count, status == .live {
+                    let end = min(i + 4_800, tail.count)
+                    await paceAudio(&nextSend)
+                    send(["type": "input_audio_buffer.append", "audio": Data(tail[i..<end]).base64EncodedString()])
+                    i = end
+                    lastActivity = Date()
+                }
+                return true
+            } catch {
+                problem = error.localizedDescription
+                if sent > 0 { return true }   // Cut off mid-sentence still counts as speaking.
+                try? await Task.sleep(for: .milliseconds(700 * attempt))
+            }
         }
+        lastError = "Simulated caller: TTS failed (\(problem))"
+        return false
+    }
+
+    private func paceAudio(_ next: inout Date) async {
+        let wait = next.timeIntervalSinceNow
+        if wait > 0 { try? await Task.sleep(for: .milliseconds(Int(wait * 1000))) }
+        next = max(next, Date()).addingTimeInterval(0.1)
+    }
+
+    /// Tester fallback when TTS is unavailable: the caller's line goes in as a text turn.
+    func sendCallerText(_ text: String) {
         guard status == .live else { return }
-        audio.pauseMic = true
-        // Stream like a microphone would, in real time, then ~1.2 s of silence so VAD ends the turn.
-        let all = pcm + Data(count: 24_000 * 2 * 12 / 10)
-        var i = 0
-        while i < all.count, status == .live {
-            let end = min(i + 4_800, all.count)   // 100 ms of 24 kHz PCM16
-            send(["type": "input_audio_buffer.append", "audio": all.subdata(in: i..<end).base64EncodedString()])
-            i = end
-            lastActivity = Date()
-            try? await Task.sleep(for: .milliseconds(95))
-        }
+        send(["type": "conversation.item.create", "item": ["type": "message", "role": "user", "content": [["type": "input_text", "text": text]]]])
+        onEvent?(.transcript(role: .user, text: text))
+        if !responseActive { send(["type": "response.create"]) }
+        lastActivity = Date()
     }
 
     /// Let the goodbye finish playing, then end the call.

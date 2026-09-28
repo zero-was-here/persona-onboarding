@@ -19,7 +19,7 @@ struct AgentOrb: View {
     private var start: Date { AnimationClock.epoch }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: reduceMotion ? 0.25 : nil)) { ctx in
+        TimelineView(.animation(minimumInterval: reduceMotion ? 0.25 : 1.0 / 60.0)) { ctx in
             let t = ctx.date.timeIntervalSince(start)
             ZStack {
                 Rectangle()
@@ -147,7 +147,7 @@ struct WaveRing: View {
     private var start: Date { AnimationClock.epoch }
 
     var body: some View {
-        TimelineView(.animation) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
             let t = ctx.date.timeIntervalSince(start)
             Canvas { gc, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)

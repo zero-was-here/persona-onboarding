@@ -124,6 +124,7 @@ public final class OnboardingEngine {
             guard state.call.status == .connecting || state.call.status == .ringing else { return [] }
             state.call.status = .active
             state.call.connectedAt = now()
+            state.call.lastAliveAt = now()
             log("call connected")
             return [.haptic(.light)]
 
@@ -139,9 +140,11 @@ public final class OnboardingEngine {
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !t.isEmpty else { return [] }
             state.transcript.append(Message(role: role, text: t, channel: .voice, date: now()))
+            state.call.lastAliveAt = now()
             return []
 
         case .voiceToolCall(let name, let arguments, let callID):
+            state.call.lastAliveAt = now()
             return handleVoiceTool(name: name, arguments: arguments, callID: callID)
 
         case .gmailConnected(let connection):
@@ -351,7 +354,12 @@ public final class OnboardingEngine {
         // Idempotent: a hang-up and the socket closing can both report the end of the same call.
         guard state.call.status != .idle && state.call.status != .ended else { return [] }
         let wasLive = state.call.status == .active || state.call.status == .connecting
-        if let start = state.call.connectedAt { state.call.lastDuration = now().timeIntervalSince(start) }
+        if let start = state.call.connectedAt {
+            var end = now()
+            // Nothing for over a minute means the app was killed or suspended mid-call: end at the last sign of life.
+            if let alive = state.call.lastAliveAt, end.timeIntervalSince(alive) > 60 { end = alive.addingTimeInterval(2) }
+            state.call.lastDuration = max(0, end.timeIntervalSince(start))
+        }
         state.call.status = .ended
         state.call.lastEnd = reason
         state.call.connectedAt = nil
