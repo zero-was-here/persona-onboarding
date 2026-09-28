@@ -67,6 +67,9 @@ struct TesterPanel: View {
                         }
                         .padding(12)
                         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.05)))
+                        Text("Voice: \(model.voice.diagnostics)")
+                            .font(Typo.mono(11, .regular))
+                            .foregroundStyle(Theme.muted)
                         if let err = model.voice.lastError {
                             Text("Last voice error: \(err)").font(Typo.sans(12)).foregroundStyle(Theme.warning)
                         }

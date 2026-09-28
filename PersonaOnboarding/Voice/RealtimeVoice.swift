@@ -25,6 +25,7 @@ final class RealtimeVoice {
     private(set) var assistantCaption = ""
     private(set) var userCaption = ""
     private(set) var lastError: String?
+    private(set) var diagnostics = "not connected"
     private(set) var isMuted = false
     private(set) var speakerOn = true
 
@@ -66,6 +67,7 @@ final class RealtimeVoice {
     @ObservationIgnored private var sendQueue = DispatchQueue(label: "voice.send")
     @ObservationIgnored private var didReportEnd = false
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
+    @ObservationIgnored private var eventsReceived = 0
 
     // MARK: - Lifecycle
 
@@ -218,6 +220,7 @@ final class RealtimeVoice {
     private func tick() {
         let playing = audio.isPlaying
         assistantSpeaking = playing
+        diagnostics = "\(audio.info) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
         if playing || userSpeaking || responseActive { lastActivity = Date() }
 
         if let reason = pendingHangUp {
@@ -304,6 +307,7 @@ final class RealtimeVoice {
     private func handle(_ text: String) {
         guard let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
               let type = obj["type"] as? String else { return }
+        eventsReceived += 1
 
         switch type {
         case "session.updated":
