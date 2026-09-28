@@ -482,6 +482,8 @@ public final class OnboardingEngine {
 
     public static func callEndNote(_ reason: CallEndReason, duration: TimeInterval) -> String {
         let secs = Int(duration)
+        // A call can end right after the user says something, before the voice agent saved it.
+        let recover = " If they already said their name or what they need on the call (lines marked \"(on the call)\"), treat it as given: fill it in now and don't ask for it again."
         switch reason {
         case .declined:
             return "The user declined your call. Totally fine: continue here by text with what's still missing. No guilt-tripping, and don't offer to call again unless they ask."
@@ -492,15 +494,15 @@ public final class OnboardingEngine {
         case .failed:
             return "The call couldn't connect because of a network problem. Apologize briefly, continue by text, and offer to try the call again."
         case .dropped:
-            return "The call dropped after \(secs)s. Acknowledge it like a human would (\"looks like we got cut off\"), continue by text with what's still missing, and offer to call back."
+            return "The call dropped after \(secs)s. Acknowledge it like a human would (\"looks like we got cut off\"), continue by text with what's still missing, and offer to call back." + recover
         case .userHungUp:
-            return "The user hung up after \(secs)s. Don't make it awkward (maybe they're busy). If they said they had to go, keep it light: acknowledge it and leave one easy question they can answer whenever they're back. Don't call again unless they ask."
+            return "The user hung up after \(secs)s. Don't make it awkward (maybe they're busy). If they said they had to go, keep it light: acknowledge it and leave one easy question they can answer whenever they're back. Don't call again unless they ask." + recover
         case .silence:
-            return "The call ended because the line went quiet (you told them you'd text instead). Continue by text, lightly; they may have stepped away."
+            return "The call ended because the line went quiet (you told them you'd text instead). Continue by text, lightly; they may have stepped away." + recover
         case .switchedToText:
-            return "The user wanted to continue by text. Pick up exactly where the call left off."
+            return "The user wanted to continue by text. Pick up exactly where the call left off." + recover
         case .completed, .graduated:
-            return "The call ended. Continue by text with anything that's still missing."
+            return "The call ended. Continue by text with anything that's still missing." + recover
         }
     }
 
