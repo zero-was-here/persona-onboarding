@@ -70,6 +70,8 @@ final class RealtimeVoice {
     @ObservationIgnored private var eventsReceived = 0
     @ObservationIgnored private var apiKey = ""
     private(set) var simulatingCaller = false
+    /// While a reviewer has the Tester panel open, don't hang up on them for being quiet.
+    var suspendSilenceCheck = false
 
     // MARK: - Lifecycle
 
@@ -278,6 +280,7 @@ final class RealtimeVoice {
         }
 
         guard status == .live else { return }
+        if suspendSilenceCheck || simulatingCaller { lastActivity = Date(); return }
         let quiet = Date().timeIntervalSince(lastActivity)
         if quiet > 10, !nudgedForSilence {
             nudgedForSilence = true

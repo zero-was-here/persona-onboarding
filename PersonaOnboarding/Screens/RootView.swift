@@ -52,6 +52,7 @@ struct RootView: View {
                 .presentationCornerRadius(34)
         }
         .preferredColorScheme(.dark)
+        .onChange(of: model.showTester) { _, open in model.voice.suspendSilenceCheck = open }
     }
 }
 
