@@ -108,7 +108,7 @@ final class AudioIO {
         wantsSpeaker = speaker
         micChunks = 0; outChunks = 0; rebuilds = 0; outputPeak = 0; inputPeak = 0
         recentRebuilds = []
-        guardWarmedUp = false; heardAgent = false; echoFloor = 0.3; loudSince = nil; gateOpenUntil = 0
+        guardWarmedUp = false; heardAgent = false; echoFloor = 0.35; loudSince = nil; gateOpenUntil = 0
         preRoll = []; guardedChunks = 0; bargeIns = 0
         clearPlayback()
 
@@ -509,7 +509,8 @@ final class AudioIO {
             preRoll.removeAll()
             send(data)
         } else {
-            if loudSince == nil { echoFloor += (level - echoFloor) * 0.05 }
+            // Learn how loud the leak is (during the first reply everything heard is the leak).
+            if !guardWarmedUp || loudSince == nil { echoFloor += (level - echoFloor) * 0.05 }
             preRoll.append(data)
             if preRoll.count > 6 { preRoll.removeFirst(preRoll.count - 6) }
             guardedChunks += 1
