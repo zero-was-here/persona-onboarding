@@ -109,9 +109,12 @@ final class AutopilotCaller {
             try? await Task.sleep(for: .milliseconds(400))
             if p.connectsGmail, !gmailTapped, model.state.gmailCardVisible, model.state.profile.gmail == nil {
                 gmailTapped = true
-                try? await Task.sleep(for: .seconds(2))
+                // Like a person: let the agent finish telling you about the button, then tap it.
+                _ = await waitFor(20, { !model.voice.assistantSpeaking && !model.voice.isResponding })
+                try? await Task.sleep(for: .milliseconds(1200))
                 note("taps Connect Gmail")
                 model.connectGmail("\(p.id)@gmail.com")
+                lastProgress = Date()
                 continue
             }
             let v = model.voice
