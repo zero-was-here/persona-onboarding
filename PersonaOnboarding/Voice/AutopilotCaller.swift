@@ -70,10 +70,10 @@ final class AutopilotCaller {
             let name = ["Nova", "Juno", "Atlas", "Sage", "Kai"].randomElement()!
             note("💬 Let's call you \(name)")
             model.send("Let's call you \(name)")
-            _ = await waitFor(20, { model.incomingCallVisible || model.state.profile.agentName != nil && !model.isThinking })
+            _ = await waitFor(20, { model.state.call.status == .ringing || model.state.profile.agentName != nil && !model.isThinking })
         }
         if !model.callVisible {
-            if !model.incomingCallVisible {
+            if model.state.call.status != .ringing {
                 guard Policy.canUserCall(model.state) else {
                     note("can't call right now")
                     running = nil
