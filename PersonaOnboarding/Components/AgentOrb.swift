@@ -16,21 +16,23 @@ struct AgentOrb: View {
     var palette: OrbPalette = .brand
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var start: Date { AnimationClock.epoch }
+    /// Per-frame smoothing lives in a reference type so it survives redraws without invalidating the view.
+    @State private var motion = OrbMotion()
 
     var body: some View {
         TimelineView(.animation(minimumInterval: reduceMotion ? 0.25 : 1.0 / 60.0)) { ctx in
-            let t = ctx.date.timeIntervalSince(start)
+            let f = motion.step(date: ctx.date, level: effectiveLevel, energy: energy, excited: mood == .happy || mood == .ringing)
             ZStack {
                 Rectangle()
                     .fill(Color.white)
                     .colorEffect(
                         ShaderLibrary.agentOrb(
                             .float2(CGSize(width: size * 1.5, height: size * 1.5)),
-                            .float(Float(t)),
-                            .float(effectiveLevel),
-                            .float(energy),
-                            .float(mood == .happy || mood == .ringing ? 1 : 0),
+                            .float(f.time),
+                            .float(f.flow),
+                            .float(f.level),
+                            .float(f.energy),
+                            .float(f.excited),
                             .color(palette.a), .color(palette.b), .color(palette.c), .color(palette.irid)
                         )
                     )
@@ -38,7 +40,7 @@ struct AgentOrb: View {
                     .allowsHitTesting(false)
 
                 if showsEyes {
-                    OrbEyes(size: size, t: t, mood: mood, level: effectiveLevel)
+                    OrbEyes(size: size, t: Double(f.time), mood: mood, level: f.level)
                 }
             }
             .frame(width: size * 1.5, height: size * 1.5)
@@ -50,13 +52,40 @@ struct AgentOrb: View {
     private var effectiveLevel: Float { min(max(level, 0), 1) }
     private var energy: Float {
         switch mood {
-        case .speaking: return 0.6 + effectiveLevel * 0.4
-        case .listening: return 0.35
+        case .speaking: return 0.75
+        case .listening: return 0.4
         case .thinking: return 0.5
         case .ringing, .happy: return 0.8
-        case .idle: return 0.2
+        case .idle: return 0.25
         case .sleepy: return 0.05
         }
+    }
+}
+
+/// Smooths the audio level and mood changes and integrates the interior's flow phase, so nothing in
+/// the shader ever jumps. (Multiplying absolute time by a changing speed made the pattern teleport.)
+final class OrbMotion {
+    struct Frame { var time: Float; var flow: Float; var level: Float; var energy: Float; var excited: Float }
+
+    private var last: Date?
+    private var flow: Double = 0
+    private var level: Double = 0
+    private var energy: Double = 0.25
+    private var excited: Double = 0
+
+    func step(date: Date, level target: Float, energy targetEnergy: Float, excited isExcited: Bool) -> Frame {
+        let dt = min(max(date.timeIntervalSince(last ?? date), 0), 0.1)
+        last = date
+        // Envelope follower: quick to rise with a syllable, slow to fall, like a VU meter.
+        let t = Double(target)
+        let tau = t > level ? 0.07 : 0.32
+        level += (t - level) * (1 - exp(-dt / tau))
+        energy += (Double(targetEnergy) - energy) * (1 - exp(-dt / 0.45))
+        excited += ((isExcited ? 1 : 0) - excited) * (1 - exp(-dt / 0.5))
+        flow += dt * (0.08 + energy * 0.16 + level * 0.12)
+        let time = date.timeIntervalSince(AnimationClock.epoch).truncatingRemainder(dividingBy: 3600)
+        return Frame(time: Float(time), flow: Float(flow.truncatingRemainder(dividingBy: 1000)),
+                     level: Float(level), energy: Float(energy), excited: Float(excited))
     }
 }
 
@@ -139,31 +168,32 @@ struct PulseRings: View {
     }
 }
 
-/// Radial audio bars around the orb that react while the user talks.
+/// Soft radial bars around the orb that swell with the voice (smoothed so they never flicker).
 struct WaveRing: View {
     var level: Float
     var diameter: CGFloat
     var color: Color = Theme.aqua
-    private var start: Date { AnimationClock.epoch }
+    @State private var motion = OrbMotion()
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
-            let t = ctx.date.timeIntervalSince(start)
+            let f = motion.step(date: ctx.date, level: min(max(level, 0), 1), energy: 0.4, excited: false)
+            let t = Double(f.time)
             Canvas { gc, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 let bars = 72
                 let inner = diameter / 2
-                let lvl = CGFloat(min(max(level, 0), 1))
+                let lvl = CGFloat(f.level)
                 for i in 0..<bars {
                     let a = Double(i) / Double(bars) * .pi * 2
-                    let wobble = (sin(a * 3 + t * 2.1) + sin(a * 7 - t * 3.3)) * 0.25 + 0.5
-                    let len = 3 + lvl * 26 * CGFloat(wobble)
+                    let wobble = (sin(a * 3 + t * 1.2) + sin(a * 5 - t * 1.7)) * 0.25 + 0.5
+                    let len = 2 + lvl * 18 * CGFloat(wobble)
                     let p1 = CGPoint(x: center.x + cos(a) * inner, y: center.y + sin(a) * inner)
                     let p2 = CGPoint(x: center.x + cos(a) * (inner + len), y: center.y + sin(a) * (inner + len))
                     var path = Path()
                     path.move(to: p1)
                     path.addLine(to: p2)
-                    gc.stroke(path, with: .color(color.opacity(0.18 + 0.5 * Double(lvl))), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    gc.stroke(path, with: .color(color.opacity(0.12 + 0.35 * Double(lvl))), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 }
             }
         }

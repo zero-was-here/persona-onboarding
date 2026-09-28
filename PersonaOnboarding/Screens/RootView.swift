@@ -76,10 +76,10 @@ struct ChatScreen: View {
                                 .padding(.top, 28)
                                 .padding(.bottom, 18)
                         }
-                        ForEach(model.state.transcript) { m in
+                        ForEach(model.visibleTranscript) { m in
                             MessageRow(message: m).id(m.id)
                         }
-                        if model.isThinking {
+                        if model.showsTyping {
                             TypingBubble().id("typing")
                         }
                         if model.state.gmailCardVisible && model.state.profile.gmail == nil && !model.callVisible {
@@ -96,7 +96,8 @@ struct ChatScreen: View {
                 .scrollDismissesKeyboard(.interactively)
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: model.state.transcript.count) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: model.isThinking) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.showsTyping) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.introVisible) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.state.gmailCardVisible) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: inputFocused) { _, _ in scrollToBottom(proxy) }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -134,7 +135,7 @@ struct ChatHeader: View {
                     .contentTransition(.opacity)
                 Text(model.chatStatusText)
                     .font(Typo.sans(12))
-                    .foregroundStyle(model.isThinking ? Theme.aqua : Theme.muted)
+                    .foregroundStyle(model.showsTyping ? Theme.aqua : Theme.muted)
                     .contentTransition(.opacity)
             }
             Spacer()
@@ -171,7 +172,7 @@ struct NamingHero: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            AgentOrb(size: 132, mood: model.isThinking ? .thinking : .idle, palette: .unnamed)
+            AgentOrb(size: 132, mood: model.showsTyping ? .thinking : .idle, palette: .unnamed)
                 .frame(height: 150)
             Eyebrow(text: "Meet your assistant")
             Text("Let's get you two\nacquainted.")

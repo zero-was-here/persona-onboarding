@@ -79,7 +79,7 @@ public enum Policy {
         case .userName:
             return "\(skipAware) For user_name: ask what you should call them."
         case .helpNeed:
-            return "\(skipAware) For help_need: ask the first thing they'd love help with; when they answer, reflect it back with one concrete example of how you'll help (no follow-up questions about it)."
+            return "\(skipAware) For help_need: don't ask an open \"how can I help?\". In one short line, name two or three concrete things you can do (e.g. sort their inbox, keep their calendar in check, draft replies), then ask what they'd like to start with. When they answer, reflect it back with one concrete example of how you'll help (no follow-up questions about it)."
         case .gmail:
             if s.gmailCardVisible {
                 return "Only Gmail is left and the Connect Gmail button is already on screen. Answer any questions (use PRIVACY FACTS); otherwise nudge them lightly to tap it, without repeating your last nudge. If they refuse, accept it (intent=refuse_gmail)."
@@ -101,7 +101,7 @@ public enum Policy {
         switch next {
         case .agentName: return "Ask what they'd like to call you, then call rename_agent."
         case .userName: return "Ask what you should call them."
-        case .helpNeed: return "Ask plainly what's the first thing they'd love help with (no examples yet); when they answer, give one concrete example of how you'll help."
+        case .helpNeed: return "Say in a few words what you can do (two or three concrete things, like sorting their inbox, keeping their calendar in check, or drafting replies), then ask what they'd like to start with; when they answer, give one concrete example of how you'll help."
         case .gmail:
             return s.gmailCardVisible
                 ? "The Connect Gmail button is on their screen. Wait for them to tap it without repeating yourself; you'll get a system message when it's connected. If they say it's done but no message came, ask them to tap it once more. If they refuse, call mark_declined."

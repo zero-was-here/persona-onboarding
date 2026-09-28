@@ -12,6 +12,16 @@ final class AppModel {
     private(set) var isThinking = false
     var ringVisible = false
     var showGmailSheet = false
+    /// The opening lines are typed out one by one (typing dots, then the bubble) instead of appearing at once.
+    private(set) var introVisible: Int?
+    private(set) var introTyping = false
+    @ObservationIgnored private var introTask: Task<Void, Never>?
+
+    var visibleTranscript: [Message] {
+        guard let n = introVisible else { return state.transcript }
+        return Array(state.transcript.prefix(n))
+    }
+    var showsTyping: Bool { isThinking || introTyping }
     var showTester = false
     var simulateNoMic = false
     let voice = RealtimeVoice()
@@ -66,7 +76,10 @@ final class AppModel {
     }
 
     func onAppear() {
-        if state.transcript.isEmpty { dispatch(.start) }
+        if state.transcript.isEmpty {
+            dispatch(.start)
+            playIntro()
+        }
         let pending = deferred
         deferred = []
         pending.forEach(perform)
@@ -107,7 +120,7 @@ final class AppModel {
     }
 
     var chatStatusText: String {
-        if isThinking { return "typing…" }
+        if showsTyping { return "typing…" }
         switch state.phase {
         case .naming: return "new · setting up"
         case .onCall: return state.call.status == .ringing ? "calling you…" : "on a call"
@@ -162,7 +175,36 @@ final class AppModel {
 
     // MARK: - User actions
 
-    func send(_ text: String) { dispatch(.userMessage(text)) }
+    func send(_ text: String) {
+        finishIntro()
+        dispatch(.userMessage(text))
+    }
+
+    private func playIntro() {
+        introTask?.cancel()
+        let count = state.transcript.count
+        guard count > 0 else { return }
+        introVisible = 0
+        introTask = Task { [weak self] in
+            for i in 1...count {
+                guard let self, !Task.isCancelled else { return }
+                self.introTyping = true
+                try? await Task.sleep(for: .milliseconds(i == 1 ? 750 : 1000))
+                guard !Task.isCancelled else { return }
+                self.introTyping = false
+                withAnimation(Motion.spring) { self.introVisible = i }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            self?.introVisible = nil
+        }
+    }
+
+    private func finishIntro() {
+        introTask?.cancel()
+        introTask = nil
+        introTyping = false
+        introVisible = nil
+    }
 
     func tap(_ s: Suggestion) {
         Haptics.light()
@@ -252,6 +294,7 @@ final class AppModel {
         showTester = false
         UserDefaults.standard.removeObject(forKey: Self.storeKey)
         dispatch(.reset)
+        playIntro()
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
