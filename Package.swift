@@ -10,10 +10,12 @@ let package = Package(
     products: [
         .library(name: "OnboardingCore", targets: ["OnboardingCore"]),
         .executable(name: "stress", targets: ["stress"]),
+        .executable(name: "callsim", targets: ["callsim"]),
     ],
     targets: [
         .target(name: "OnboardingCore", path: "PersonaOnboarding/Core"),
         .executableTarget(name: "stress", dependencies: ["OnboardingCore"], path: "Tools/stress"),
+        .executableTarget(name: "callsim", dependencies: ["OnboardingCore"], path: "Tools/callsim"),
         .testTarget(name: "OnboardingCoreTests", dependencies: ["OnboardingCore"], path: "Tests/OnboardingCoreTests"),
     ]
 )

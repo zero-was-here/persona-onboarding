@@ -58,6 +58,10 @@ final class AppModel {
         }
         state = engine.state
         voice.onEvent = { [weak self] event in self?.handleVoice(event) }
+        voice.goodbyeProvider = { [weak self] reason in
+            guard let self else { return "Say a warm one-sentence goodbye. Do not call tools." }
+            return BrainPrompts.goodbyeInstructions(self.engine.state, reason: reason)
+        }
         autopilot = AutopilotCaller(model: self)
     }
 

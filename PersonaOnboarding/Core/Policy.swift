@@ -51,7 +51,7 @@ public enum Policy {
         let p = s.profile
         let still = stillNeeded(p)
         let queue = still.map(\.rawValue).joined(separator: " → ")
-        let skipAware = "Ask only for the FIRST item in this order that their latest message did not just give you: \(queue.isEmpty ? "nothing" : queue)."
+        let skipAware = "Ask only for the FIRST item in this order that their latest message did not just give you: \(queue.isEmpty ? "nothing" : queue). Exception: if their latest message asks to skip ahead or just start and you now know what they need help with, ask nothing: give a warm one-line send-off with intent=wants_skip and action=graduate."
 
         if s.skipRequests >= 1 {
             if p.helpNeed != nil || s.skipRequests >= 2 {
@@ -101,10 +101,10 @@ public enum Policy {
         switch next {
         case .agentName: return "Ask what they'd like to call you, then call rename_agent."
         case .userName: return "Ask what you should call them."
-        case .helpNeed: return "Ask what's the first thing they'd love help with; when they answer, give one concrete example of how you'll help."
+        case .helpNeed: return "Ask plainly what's the first thing they'd love help with (no examples yet); when they answer, give one concrete example of how you'll help."
         case .gmail:
             return s.gmailCardVisible
-                ? "The Connect Gmail button is on their screen. Wait for them to tap it; you'll get a system message when it's connected. If they refuse, call mark_declined."
+                ? "The Connect Gmail button is on their screen. Wait for them to tap it without repeating yourself; you'll get a system message when it's connected. If they say it's done but no message came, ask them to tap it once more. If they refuse, call mark_declined."
                 : "Ask them to connect Gmail: call show_gmail_connect so a button appears on their screen."
         }
     }

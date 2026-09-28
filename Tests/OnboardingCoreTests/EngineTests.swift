@@ -206,4 +206,24 @@ final class EngineTests: XCTestCase {
         f.handle(.callEnded(.silence))
         XCTAssertEqual(f.state.call.lastDuration, 30, accuracy: 0.5)
     }
+    func testLanguageGuessAndVoiceLanguageTracking() {
+        XCTAssertEqual(LanguageGuess.guess("Je m'appelle Youssef et j'aimerais de l'aide pour gérer mes rendez-vous"), "French")
+        XCTAssertEqual(LanguageGuess.guess("Hola, soy Ana y necesito ayuda con mi correo"), "Spanish")
+        XCTAssertEqual(LanguageGuess.guess("مرحبا انا يوسف"), "Arabic")
+        XCTAssertEqual(LanguageGuess.guess("I need help with my inbox please"), "English")
+        XCTAssertNil(LanguageGuess.guess("Sam"))
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Zaki")))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        let fx = e.handle(.voiceTranscript(role: .user, text: "Je m'appelle Youssef, et toi ?"))
+        XCTAssertEqual(e.state.spokenLanguage, "French")
+        XCTAssertEqual(fx, [.refreshVoiceInstructions], "the call should switch language right away")
+        XCTAssertTrue(BrainPrompts.voiceInstructions(e.state).contains("Speak only French"))
+        // A one-word answer keeps the language; clear English switches back.
+        e.handle(.voiceTranscript(role: .user, text: "Oui"))
+        XCTAssertEqual(e.state.spokenLanguage, "French")
+        e.handle(.voiceTranscript(role: .user, text: "Actually I'd rather speak English, is that okay?"))
+        XCTAssertNil(e.state.spokenLanguage)
+    }
 }

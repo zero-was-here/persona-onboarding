@@ -40,6 +40,8 @@ final class RealtimeVoice {
     }
 
     var onEvent: ((Event) -> Void)?
+    /// Supplies the goodbye instructions for endings the voice layer decides on its own (silence).
+    var goodbyeProvider: ((CallEndReason) -> String)?
 
     // Config
     var model = "gpt-realtime-2.1"
@@ -59,10 +61,14 @@ final class RealtimeVoice {
     @ObservationIgnored private var goodbyeFinished = false
     @ObservationIgnored private var goodbyeInstructions = "Say a warm one-sentence goodbye. Do not call tools."
     @ObservationIgnored private var currentAssistantItem: String?
+    /// An app event (e.g. Gmail connected) arrived while the agent was mid-response: react right after it.
+    @ObservationIgnored private var respondAfterCurrent = false
     @ObservationIgnored private var lastActivity = Date()
     @ObservationIgnored private var nudgedForSilence = false
     @ObservationIgnored private var watchdog: Task<Void, Never>?
     @ObservationIgnored private var pendingHangUp: CallEndReason?
+    /// Set once the agent starts wrapping up: if the line drops during the goodbye, that's still the planned ending.
+    @ObservationIgnored private var plannedEnd: CallEndReason?
     @ObservationIgnored private var hangUpDeadline: Date?
     @ObservationIgnored private var sendQueue = DispatchQueue(label: "voice.send")
     @ObservationIgnored private var didReportEnd = false
@@ -83,9 +89,11 @@ final class RealtimeVoice {
         status = .connecting
         didReportEnd = false
         pendingHangUp = nil
+        plannedEnd = nil
         goodbyeRequested = false
         goodbyeStarted = false
         goodbyeFinished = false
+        respondAfterCurrent = false
         nudgedForSilence = false
         assistantCaption = ""
         userCaption = ""
@@ -158,7 +166,9 @@ final class RealtimeVoice {
     func injectSystem(_ text: String, respond: Bool = true) {
         guard status == .live else { return }
         send(["type": "conversation.item.create", "item": ["type": "message", "role": "system", "content": [["type": "input_text", "text": text]]]])
-        if respond && !responseActive { send(["type": "response.create"]) }
+        if respond {
+            if responseActive { respondAfterCurrent = true } else { send(["type": "response.create"]) }
+        }
         lastActivity = Date()
     }
 
@@ -174,7 +184,7 @@ final class RealtimeVoice {
     /// Separate from URLSession.shared so a stale pooled connection can't break the caller's voice.
     private static let ttsSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 12   // idle timeout: a stalled TTS stream fails fast and is retried
         return URLSession(configuration: config)
     }()
 
@@ -264,6 +274,7 @@ final class RealtimeVoice {
     /// Let the goodbye finish playing, then end the call.
     func hangUpAfterSpeaking(_ reason: CallEndReason, goodbye: String) {
         pendingHangUp = reason
+        plannedEnd = reason
         goodbyeInstructions = goodbye
         hangUpDeadline = Date().addingTimeInterval(12)
         status = .ending
@@ -347,8 +358,23 @@ final class RealtimeVoice {
             nudgedForSilence = true
             injectSystem("The line has been quiet for about 10 seconds. Check in once, briefly and kindly (e.g. \"Still with me?\").")
         } else if quiet > 24 {
-            finish(.silence, error: nil)
+            // Don't just vanish: say you'll continue by text, then hang up once that line has played.
+            if let goodbye = goodbyeProvider?(.silence) {
+                endWithGoodbye(.silence, goodbye: goodbye)
+            } else {
+                finish(.silence, error: nil)
+            }
         }
+    }
+
+    private func endWithGoodbye(_ reason: CallEndReason, goodbye: String) {
+        pendingHangUp = reason
+        plannedEnd = reason
+        goodbyeInstructions = goodbye
+        goodbyeRequested = true
+        hangUpDeadline = Date().addingTimeInterval(10)
+        status = .ending
+        send(["type": "response.create", "response": ["instructions": goodbye, "tool_choice": "none"]])
     }
 
     private func finish(_ reason: CallEndReason, error: String?) {
@@ -396,7 +422,11 @@ final class RealtimeVoice {
                 case .failure(let error):
                     // Network loss, server close, airplane mode…
                     let wasLive = self.status == .live || self.status == .ending
-                    self.finish(wasLive ? .dropped : .failed, error: error.localizedDescription)
+                    if let planned = self.plannedEnd {
+                        self.finish(planned, error: nil)   // it dropped mid-goodbye: the user already heard the wrap-up
+                    } else {
+                        self.finish(wasLive ? .dropped : .failed, error: error.localizedDescription)
+                    }
                 case .success(let message):
                     switch message {
                     case .string(let text): self.handle(text)
@@ -494,8 +524,10 @@ final class RealtimeVoice {
                     hangUpDeadline = Date().addingTimeInterval(12)
                     send(["type": "response.create", "response": ["instructions": goodbyeInstructions, "tool_choice": "none"]])
                 }
-            } else if responseHadToolCall && status == .live && !responseTranscript.contains("?") {
-                // Tools ran and the agent didn't ask anything yet: let it continue with the tool results.
+            } else if status == .live && (respondAfterCurrent || (responseHadToolCall && !responseTranscript.contains("?"))) {
+                // Tools ran and the agent didn't ask anything yet, or an app event landed mid-sentence:
+                // let it continue with what it now knows.
+                respondAfterCurrent = false
                 send(["type": "response.create"])
             }
 

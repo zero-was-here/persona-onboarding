@@ -11,6 +11,8 @@ public struct OnboardingState: Codable, Equatable, Sendable {
     public var skipRequests = 0
     public var graduatedEarly = false
     public var graduatedAt: Date?
+    /// Non-English language the user is speaking (nil = English / not sure yet).
+    public var spokenLanguage: String?
     public var startedAt = Date()
     public var log: [String] = []
 
@@ -94,6 +96,7 @@ public final class OnboardingEngine {
             let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return [] }
             state.transcript.append(Message(role: .user, text: text, channel: .text, date: now()))
+            noteLanguage(text)
             return [.runTextBrain(note: nil)]
 
         case .textBrainReplied(let turn):
@@ -141,6 +144,11 @@ public final class OnboardingEngine {
             guard !t.isEmpty else { return [] }
             state.transcript.append(Message(role: role, text: t, channel: .voice, date: now()))
             state.call.lastAliveAt = now()
+            if role == .user {
+                let before = state.spokenLanguage
+                noteLanguage(t)
+                if state.spokenLanguage != before, state.call.status == .active { return [.refreshVoiceInstructions] }
+            }
             return []
 
         case .voiceToolCall(let name, let arguments, let callID):
@@ -156,7 +164,7 @@ public final class OnboardingEngine {
             var effects: [OnboardingEffect] = [.haptic(.success)]
             if state.call.status == .active || state.call.status == .connecting {
                 effects.append(.refreshVoiceInstructions)
-                effects.append(.voiceSystemNote("The user just connected their Gmail (\(connection.email)). Acknowledge it in a few words, in the user's language, and continue. \(Policy.voiceNextStep(state))"))
+                effects.append(.voiceSystemNote("The user just connected their Gmail (\(connection.email)). Acknowledge it in a few words, in the user's language, and continue. \(Policy.voiceNextStep(state))\(languageReminder)"))
             } else if state.phase != .graduated {
                 effects.append(.runTextBrain(note: "The user just connected their Gmail (\(connection.email)). Acknowledge it briefly and continue."))
             }
@@ -165,7 +173,7 @@ public final class OnboardingEngine {
         case .gmailCancelled:
             log("gmail connect cancelled")
             if state.call.status == .active {
-                return [.voiceSystemNote("The user closed the Gmail screen without connecting. Don't push. In the user's language, lightly ask if they'd like to try again or skip it for now (if they skip, call mark_declined).")]
+                return [.voiceSystemNote("The user closed the Gmail screen without connecting. Don't push. In the user's language, lightly ask if they'd like to try again or skip it for now (if they skip, call mark_declined).\(languageReminder)")]
             }
             if state.phase == .graduated { return [] }
             return [.runTextBrain(note: "The user closed the Gmail screen without connecting. Don't push; lightly ask if they'd like to try again or leave it for later.")]
@@ -337,6 +345,7 @@ public final class OnboardingEngine {
 
         result["still_needed"] = Policy.stillNeeded(state.profile).map(\.rawValue)
         result["next"] = Policy.voiceNextStep(state)
+        if let lang = state.spokenLanguage { result["language"] = "Keep speaking \(lang)." }
         return [.voiceToolResult(callID: callID, output: Self.json(result)), .refreshVoiceInstructions] + effects
     }
 
@@ -420,6 +429,15 @@ public final class OnboardingEngine {
         state.transcript.append(Message(role: .assistant, text: t, channel: channel, date: now()))
     }
 
+    private func noteLanguage(_ text: String) {
+        guard let g = LanguageGuess.guess(text) else { return }
+        state.spokenLanguage = g == "English" ? nil : g
+    }
+
+    private var languageReminder: String {
+        state.spokenLanguage.map { " Reply in \($0)." } ?? ""
+    }
+
     private func log(_ line: String) {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
@@ -466,9 +484,9 @@ public final class OnboardingEngine {
         case .dropped:
             return "The call dropped after \(secs)s. Acknowledge it like a human would (\"looks like we got cut off\"), continue by text with what's still missing, and offer to call back."
         case .userHungUp:
-            return "The user hung up after \(secs)s. Don't make it awkward (maybe they're busy). Continue by text with what's still missing; don't call again unless they ask."
+            return "The user hung up after \(secs)s. Don't make it awkward (maybe they're busy). If they said they had to go, keep it light: acknowledge it and leave one easy question they can answer whenever they're back. Don't call again unless they ask."
         case .silence:
-            return "The call ended because the line went quiet. Continue by text, lightly; they may have stepped away."
+            return "The call ended because the line went quiet (you told them you'd text instead). Continue by text, lightly; they may have stepped away."
         case .switchedToText:
             return "The user wanted to continue by text. Pick up exactly where the call left off."
         case .completed, .graduated:
