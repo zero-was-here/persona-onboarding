@@ -268,8 +268,9 @@ actor CallSim {
                 do {
                     let turn = try await brain.nextTurn(state: engine.state, note: note)
                     brainLatencies.append(Date().timeIntervalSince(started))
+                    let before = engine.state.transcript.count
                     let more = engine.handle(.textBrainReplied(turn))
-                    log("AGENT (text): \(turn.reply)")
+                    for m in engine.state.transcript.dropFirst(before) where m.role == .assistant { log("AGENT (text): \(m.text)") }
                     await apply(more)
                 } catch {
                     errors.append("brain: \(error)")

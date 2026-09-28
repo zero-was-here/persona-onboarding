@@ -4,11 +4,20 @@ A native iOS (SwiftUI) take on Persona's onboarding. A brand-new assistant gets 
 
 > Built for the Persona CTO trial by Ahmed Aymane Alexander El Jebari.
 
-## Try it
+## Try it (about two minutes)
 
-- **iPhone:** TestFlight link (see the submission form).
-- **From source:** open `PersonaOnboarding.xcodeproj` in Xcode 26+, add `PersonaOnboarding/Secrets.json` with `{"OPENAI_API_KEY": "sk-..."}` (or paste a key in the in-app **Tester tools**), then run on an iPhone or the Simulator (iOS 18+).
-- **Tester tools** (the slider icon, top right) show the live onboarding state and let you break things on purpose: drop the call, pretend the mic is denied, call now, skip, or restart.
+1. Open `PersonaOnboarding.xcodeproj` in **Xcode 26** or later.
+2. Give it an **OpenAI API key**, either way:
+   - create `PersonaOnboarding/Secrets.json` containing `{"OPENAI_API_KEY": "sk-..."}` (it's git-ignored), or
+   - run the app, open **Tester tools** (slider icon, top right) and paste the key under **Models**.
+3. Pick an **iPhone** or the **Simulator** (iOS 18+) and press **Run**. On an iPhone, choose your own signing team (and a unique bundle ID if Xcode asks).
+
+Tips:
+
+- **The call is best on a real iPhone:** that's where echo cancellation runs, so you can talk over the agent. In the Simulator it uses your Mac's mic and speakers and mutes the mic while the agent talks.
+- **Watch it without talking:** Tester tools → **Autopilot caller** runs a whole onboarding by voice with an AI caller (8 personas: refuses Gmail, impatient skipper, French speaker, troll…).
+- **Break it on purpose:** Tester tools can drop the call, pretend the mic is denied, call you now, skip ahead, or restart. The same panel shows the live state and voice diagnostics.
+- **Gmail** is a real Google sign-in that only confirms your address; the OAuth client ID in the code is public by design. If it can't sign in (e.g. a changed bundle ID), the app offers a clearly labeled demo connection.
 
 ## How it works
 
@@ -67,15 +76,15 @@ flowchart LR
 
 Four layers, from pure logic to the real app:
 
-1. **Unit tests** for the engine (23): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, restored calls, language tracking, and more. Run `swift test`.
+1. **Unit tests** for the engine (24): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, injected markup (refused, never echoed), restored calls, language tracking, kept promises, call-back greetings, and more. Run `swift test`.
 2. **Chat stress test:** an LLM plays 12 difficult personas against the real engine and brain, the harness plays the app (declines, drops, Gmail taps), and a judge model grades each transcript. Run `OPENAI_API_KEY=… swift run stress`.
-3. **Voice call simulation with real audio:** `swift run callsim` drives `gpt-realtime-2.1` with the real engine, prompts and tools, using the same event handling as the app. LLM callers answer *out loud*: their lines go through OpenAI TTS and stream into the input buffer like a live mic, so turn detection, transcription, barge-in, silence and hang-ups all run for real. The 12 callers include an interrupter, someone who goes quiet, someone who hangs up, a Gmail refuser, a skipper, a French speaker, a privacy skeptic and a troll. It needs Node (`cd harness && npm install`).
+3. **Voice call simulation with real audio:** `swift run callsim` drives `gpt-realtime-2.1` with the real engine, prompts and tools, using the same event handling as the app. LLM callers answer *out loud*: their lines go through OpenAI TTS and stream into the input buffer like a live mic, so turn detection, transcription, barge-in, silence and hang-ups all run for real. The 15 callers include an interrupter, someone who goes quiet, two who hang up (one mid-sentence), a Gmail refuser, a skipper, a French speaker, a privacy skeptic, a troll, someone who asks for code (out of scope) and someone who asks for an email draft mid-call (delivered after onboarding). It needs Node (`cd harness && npm install`).
 4. **Autopilot caller in the app** (Tester tools → Autopilot caller): the same kind of AI caller talks to the agent through the real iOS audio path and UI, taps Connect Gmail, and continues by text if the call ends.
 
 Latest results:
 
-- **Chat:** all 12 personas finish with the right details, and 9/12 also clear the strict judge bar. Chat turns take about 1.8 s median.
-- **Voice (audio simulation):** all 12 callers finish onboarding, with judge scores of 8–10 (median 10/10). The agent starts answering about 1 s (median) after the caller stops talking.
+- **Chat:** all 12 personas finish, and 10/12 also clear the strict judge bar (one agent name picked by the agent instead of the persona, one privacy answer over the word limit). Chat turns take about 1.8 s median.
+- **Voice (audio simulation):** all 15 callers finish onboarding and 14/15 clear the strict bar (in that run the interrupter never actually talked over the agent). Judge scores 7–10, median 8/10. The agent starts answering about 1.1 s (median) after the caller stops talking.
 - **In the app (Simulator, Autopilot caller):** all 8 personas finish end to end through the real UI and audio path, in about 30–75 s per call.
 
 ## Design
@@ -84,11 +93,13 @@ Latest results:
 
 ## Decisions and trade-offs
 
-- **Native iOS over web.** A real phone-call feel (full-screen incoming call, haptic ring, echo-cancelled audio) matters for this product. The trade-off is distribution through TestFlight instead of a URL.
+- **Native iOS over web.** A real phone-call feel (full-screen incoming call, haptic ring, echo-cancelled audio) matters for this product. The trade-off is that you run it from Xcode instead of a URL.
 - **Realtime over WebSocket, not WebRTC.** No third-party WebRTC binary, full control of the audio graph, and simpler debugging.
 - **Real Google sign-in, identity only (for now).** The Gmail step is a real Google OAuth sign-in (authorization code + PKCE, no SDK) that connects the user's actual Gmail address. The trial asks only for basic scopes, which Google lets any account grant with no warning screen and no app review, so every reviewer can connect. `gmail.labels` (non-sensitive) is already wired up behind a flag and turns on once the consent screen is published with a privacy-policy page; reading messages (`gmail.readonly`) is a restricted scope that needs Google's security assessment, which takes weeks. Builds without a Google client ID fall back to a clearly labeled demo connection.
 - **Captions show the agent, not you.** The call screen captions the agent's exact words. The user's speech isn't echoed back live, because speech-to-text can mishear any word (names especially); the agent's reply already shows what it understood. The call transcript still lands in the chat, with the user's name corrected once it's saved.
-- **API key in the build (gitignored `Secrets.json`).** Fine for a trial with a capped key. Production would mint short-lived realtime tokens from a small backend.
+- **API key on the device (gitignored `Secrets.json` or pasted in Tester tools).** Fine for a prototype. Production would mint short-lived realtime tokens from a small backend.
+- **An echo guard on top of Apple's echo cancellation.** On speakerphone some of the agent's voice still leaks into the mic (most at the start of a call). The server then thought the user spoke, and the agent cut itself off or "heard" words nobody said. While the agent talks, only speech clearly louder than that leak, lasting ~150 ms, gets through; nothing does during its first sentence. The cost: to interrupt, you speak up a little.
+- **It knows its limits.** One capabilities sheet feeds the call, the onboarding chat and the main chat. Out-of-scope asks (code, apps, games) get an honest "not something I do" plus the closest thing it can do. In-scope asks that don't fit a call (an email draft) are promised and then delivered in the chat right after onboarding.
 
 ## What's next
 

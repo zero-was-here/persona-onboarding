@@ -101,6 +101,22 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(BrainPrompts.voiceInstructions(e.state).contains("again!"), "second call opens as a call back")
     }
 
+    func testInjectedMarkupNameIsRefusedAndNeverEchoed() {
+        let e = engine()
+        let fx = e.handle(.textBrainReplied(TextTurn(reply: "I'll go by “<script>alert(1)</script>.” I'll ring you!", agentName: "<script>alert(1)</script>", action: .startCall)))
+        XCTAssertNil(e.state.profile.agentName)
+        XCTAssertFalse(fx.contains(.ring(after: 1.6)), "no call before there's a real name")
+        let last = e.state.transcript.last(where: { $0.role == .assistant })?.text ?? ""
+        XCTAssertFalse(last.contains("<script"), "markup is never shown")
+        XCTAssertTrue(last.contains("won't work as a name"))
+        XCTAssertEqual(OnboardingEngine.safeReply("Sure <b>thing</b> <3"), "Sure thing <3")
+        // The model echoes the payload without proposing it as a name: still refused, still not shown.
+        let e2 = engine()
+        e2.handle(.textBrainReplied(TextTurn(reply: "A bold choice. I'll go by <script>alert(1)</script>!", action: .startCall)))
+        let last2 = e2.state.transcript.last(where: { $0.role == .assistant })?.text ?? ""
+        XCTAssertFalse(last2.contains("script") || last2.contains("alert("))
+    }
+
     func testEarlyGraduationNeedsHelpNeedButNeverTraps() {
         let e = engine()
         e.handle(.textBrainReplied(TextTurn(reply: "Nice", agentName: "Ivy")))

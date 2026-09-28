@@ -212,7 +212,7 @@ public final class OnboardingEngine {
         let hadAgentName = state.profile.agentName != nil
 
         if state.phase == .graduated {
-            say(turn.reply, .text)
+            say(Self.safeReply(turn.reply), .text)
             if turn.action == .showGmailConnect, state.profile.gmail == nil {
                 state.gmailCardVisible = true
                 effects.append(.showGmailConnect)
@@ -220,6 +220,16 @@ public final class OnboardingEngine {
             return effects
         }
 
+        var reply = Self.safeReply(turn.reply)
+        // The model wanted to take a name that validation refuses (markup, code, a URL…), or its reply carries
+        // markup while it's still unnamed: never pretend it worked, never echo the payload back.
+        let proposed = turn.agentName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let refusedName = !proposed.isEmpty && Validation.cleanName(proposed) == nil
+        let replyHadMarkup = turn.reply.range(of: "<[A-Za-z/][^<>]{0,200}>", options: .regularExpression) != nil
+        if state.profile.agentName == nil, Validation.cleanName(proposed) == nil, refusedName || replyHadMarkup {
+            reply = "Ha, nice try, but that one won't work as a name. Something short and friendly? Nova, Juno or Atlas are all free."
+            log("refused agent name: \((proposed.isEmpty ? turn.reply : proposed).prefix(40))")
+        }
         applyFields(agentName: turn.agentName, userName: turn.userName, helpNeed: turn.helpNeed, category: turn.helpCategory)
         if let r = Self.cleanRequest(turn.rememberRequest) {
             state.laterRequests = (state.laterRequests ?? []) + [r]
@@ -255,7 +265,7 @@ public final class OnboardingEngine {
             }
         }
 
-        say(turn.reply, .text)
+        say(reply, .text)
         if defaultedName {
             say("I'll go by \(Policy.defaultAgentName) for now. You can rename me anytime.", .text)
         }
@@ -430,6 +440,14 @@ public final class OnboardingEngine {
             effects.append(.runTextBrain(note: "While getting set up, the user asked you for: \(list). You promised to do it here once they were in. Do it now, completely (a full draft or plan is fine), starting with a short line like \"As promised, here's…\"."))
         }
         return effects
+    }
+
+    /// Never show markup from the model (e.g. a `<script>` tag a user tried to inject), just its words.
+    static func safeReply(_ text: String) -> String {
+        let stripped = text.replacingOccurrences(of: "<[^<>]{1,200}>", with: "", options: .regularExpression)
+        let tidy = stripped.replacingOccurrences(of: "[ \t]{2,}", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return tidy.isEmpty ? "Sorry, could you say that another way?" : tidy
     }
 
     static func cleanRequest(_ raw: String?) -> String? {

@@ -100,8 +100,10 @@ func runPersona(_ p: Persona, brain: TextBrain, chat: Chat, maxTurns: Int = 14) 
                 do {
                     let turn = try await brain.nextTurn(state: engine.state, note: note)
                     latencies.append(Date().timeIntervalSince(t0))
+                    let before = engine.state.transcript.count
                     let more = engine.handle(.textBrainReplied(turn))
-                    visible.append("ASSISTANT: \(turn.reply)")
+                    // Log what the user actually sees (after the engine's safety filters), not the raw model text.
+                    for m in engine.state.transcript.dropFirst(before) where m.role == .assistant { visible.append("ASSISTANT: \(m.text)") }
                     queue += more
                 } catch {
                     errors.append("brain: \(error)")
