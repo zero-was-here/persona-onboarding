@@ -37,10 +37,8 @@ final class RealtimeVoice {
     func setSpeaker(_ on: Bool) {
         speakerOn = on
         audio.setSpeaker(on)
-        // Speakerphone picks up the room: switch the server's noise filter to match.
-        if status == .live || status == .ending {
-            send(["type": "session.update", "session": ["type": "realtime", "audio": ["input": inputAudioConfig(transcriptionPrompt: transcriptionPrompt)]]])
-        }
+        // The server's noise filter follows on the next instructions refresh (never mid-sentence:
+        // re-sending turn detection while the user talks can hold their turn open).
     }
 
     var onEvent: ((Event) -> Void)?
