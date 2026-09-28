@@ -71,7 +71,8 @@ Four layers, from pure logic to the real app:
 Latest results:
 
 - **Chat:** all 12 personas finish with the right details, and 9/12 also clear the strict judge bar. Chat turns take about 1.8 s median.
-- **Voice (audio):** all 12 callers finish onboarding, and the median judge score is 9/10. The agent starts answering about 0.8 s (median) after the caller stops talking.
+- **Voice (audio simulation):** all 12 callers finish onboarding, with judge scores of 8–10 (median 10/10). The agent starts answering about 1 s (median) after the caller stops talking.
+- **In the app (Simulator, Autopilot caller):** all 8 personas finish end to end through the real UI and audio path, in about 30–75 s per call.
 
 ## Design
 

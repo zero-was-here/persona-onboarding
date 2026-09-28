@@ -163,6 +163,7 @@ final class AutopilotCaller {
                   last.role == .assistant, last.channel == .text, last.id != lastText else { continue }
             lastText = last.id
             guard let reply = await nextLine(p, channel: "a text chat") else { break }
+            guard !Task.isCancelled, model.state.phase != .graduated else { break }   // they may have just been let in
             textTurns += 1
             note("💬 \(reply)")
             model.send(reply)
