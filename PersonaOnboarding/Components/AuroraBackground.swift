@@ -4,7 +4,7 @@ import SwiftUI
 struct AuroraBackground: View {
     var boost: Double = 0.6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let start = Date()
+    private var start: Date { AnimationClock.epoch }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0)) { ctx in

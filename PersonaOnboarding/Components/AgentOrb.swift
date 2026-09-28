@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// One shared clock so animations stay continuous when SwiftUI recreates views.
+enum AnimationClock {
+    static let epoch = Date()
+}
+
 enum OrbMood: Equatable { case idle, listening, thinking, speaking, happy, ringing, sleepy }
 
 /// The agent's living presence: a Metal glass orb with a tiny face.
@@ -11,7 +16,7 @@ struct AgentOrb: View {
     var palette: OrbPalette = .brand
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let start = Date()
+    private var start: Date { AnimationClock.epoch }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: reduceMotion ? 0.25 : nil)) { ctx in
@@ -139,7 +144,7 @@ struct WaveRing: View {
     var level: Float
     var diameter: CGFloat
     var color: Color = Theme.aqua
-    private let start = Date()
+    private var start: Date { AnimationClock.epoch }
 
     var body: some View {
         TimelineView(.animation) { ctx in

@@ -65,7 +65,9 @@ struct ChatScreen: View {
             ChatHeader()
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    // Plain VStack: onboarding transcripts are short, and LazyVStack + a bottom scroll anchor
+                    // can spin in a layout loop while messages stream in behind the call screen.
+                    VStack(spacing: 10) {
                         if model.state.phase == .naming {
                             NamingHero()
                                 .padding(.top, 28)
