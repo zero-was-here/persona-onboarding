@@ -184,6 +184,7 @@ actor CallSim {
     private var itemStart: Date?
     private var itemScheduled: Double = 0
     private var userSpeaking = false
+    private var awaitingUserTranscript = false
     private var lastActivity = Date()
     private var nudgedForSilence = false
     private var callerSpeaking = false   // thinking + talking (silence watchdog paused, like the app)
@@ -372,6 +373,7 @@ actor CallSim {
             }
         case "input_audio_buffer.speech_started":
             userSpeaking = true
+            awaitingUserTranscript = true
             lastActivity = Date()
             nudgedForSilence = false
             if isPlaying {
@@ -393,6 +395,7 @@ actor CallSim {
                 log("   heard (transcription): \(t)")
                 await apply(engine.handle(.voiceTranscript(role: .user, text: t)))
             }
+            awaitingUserTranscript = false
         case "response.created":
             if goodbyeRequested && !goodbyeStarted { goodbyeStarted = true }
             responseActive = true
@@ -594,6 +597,14 @@ actor CallSim {
             if let n = caller.hangsUpAfter, spokenTurns >= n, !callFinished {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
                 log("[caller taps End call]")
+                // Like the app: catch the last words before hanging up (commit + wait up to 1.5 s).
+                if awaitingUserTranscript {
+                    if userSpeaking { link?.send(["type": "input_audio_buffer.commit"]) }
+                    let deadline = Date().addingTimeInterval(1.5)
+                    while awaitingUserTranscript, status == .live || status == .ending, Date() < deadline {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                }
                 await finish(.userHungUp)
             }
         }

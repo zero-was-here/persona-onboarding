@@ -79,6 +79,10 @@ final class RealtimeVoice {
     @ObservationIgnored private var eventsReceived = 0
     @ObservationIgnored private var apiKey = ""
     @ObservationIgnored private var transcriptionPrompt = ""
+    /// The user started speaking and their words haven't come back transcribed yet.
+    @ObservationIgnored private var awaitingUserTranscript = false
+    /// The user already hung up; we're only waiting for their last words' transcript. Stay silent.
+    @ObservationIgnored private var endingByUser = false
     private(set) var simulatingCaller = false
     /// Autopilot mode: the real microphone is replaced by silence plus the caller's synthetic speech,
     /// so room noise around the Mac/iPhone can't hold the turn open.
@@ -99,6 +103,8 @@ final class RealtimeVoice {
         let gen = generation
         status = .connecting
         didReportEnd = false
+        awaitingUserTranscript = false
+        endingByUser = false
         pendingHangUp = nil
         plannedEnd = nil
         goodbyeRequested = false
@@ -145,6 +151,24 @@ final class RealtimeVoice {
             guard let self, self.generation == gen, self.status == .connecting else { return }
             self.finish(.failed, error: "Timed out connecting")
         }
+    }
+
+    /// The user ended the call (End call / Text). If they were mid-sentence, or had just finished and the
+    /// server hadn't transcribed it yet, hand that audio in and wait briefly for its transcript, so the chat
+    /// continues from what they said instead of asking again. The agent goes quiet immediately.
+    func endCatchingLastWords() async {
+        guard status == .live || status == .ending else { stop(); return }
+        endingByUser = true
+        audio.stopPlayback()
+        audio.muted = true
+        if awaitingUserTranscript {
+            if userSpeaking { send(["type": "input_audio_buffer.commit"]) }
+            let deadline = Date().addingTimeInterval(1.5)
+            while awaitingUserTranscript, status == .live || status == .ending, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        stop()
     }
 
     /// Intentional stop by the app (no event is reported back).
@@ -511,6 +535,7 @@ final class RealtimeVoice {
 
         case "input_audio_buffer.speech_started":
             userSpeaking = true
+            awaitingUserTranscript = true
             userCaption = ""
             lastActivity = Date()
             nudgedForSilence = false
@@ -536,6 +561,10 @@ final class RealtimeVoice {
                 userCaption = t
                 onEvent?(.transcript(role: .user, text: t))
             }
+            awaitingUserTranscript = false
+
+        case "conversation.item.input_audio_transcription.failed":
+            awaitingUserTranscript = false
 
         case "response.created":
             if goodbyeRequested && !goodbyeStarted { goodbyeStarted = true }
@@ -558,7 +587,7 @@ final class RealtimeVoice {
             }
 
         case "response.output_audio.delta":
-            if let d = obj["delta"] as? String, let data = Data(base64Encoded: d) {
+            if !endingByUser, let d = obj["delta"] as? String, let data = Data(base64Encoded: d) {
                 responseHadAudio = true
                 audio.play(pcm16: data)
                 lastActivity = Date()

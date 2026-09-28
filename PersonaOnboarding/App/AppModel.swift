@@ -99,7 +99,9 @@ final class AppModel {
     var agentName: String { state.profile.agentName ?? "Your assistant" }
     var isNamed: Bool { state.profile.agentName != nil }
     var incomingCallVisible: Bool { ringVisible && state.call.status == .ringing }
-    var callVisible: Bool { state.call.status == .connecting || state.call.status == .active }
+    var callVisible: Bool { (state.call.status == .connecting || state.call.status == .active) && !hangingUp }
+    /// End call was tapped: the call screen goes away at once while the last words are caught.
+    private(set) var hangingUp = false
 
     var chatOrbMood: OrbMood {
         if isThinking { return .thinking }
@@ -256,16 +258,21 @@ final class AppModel {
         dispatch(.callDeclined)
     }
 
-    func hangUp() {
-        voice.stop()
-        SoundFX.shared.play("call_end")
-        dispatch(.callEnded(.userHungUp))
-    }
+    func hangUp() { endCallByUser(.userHungUp) }
 
-    func switchToText() {
-        voice.stop()
+    func switchToText() { endCallByUser(.switchedToText) }
+
+    /// "I'm Nadia, sorry, gotta go!" + End call: whatever they just said still reaches the chat.
+    private func endCallByUser(_ reason: CallEndReason) {
+        guard !hangingUp else { return }
+        hangingUp = true
         SoundFX.shared.play("call_end")
-        dispatch(.callEnded(.switchedToText))
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.voice.endCatchingLastWords()
+            self.dispatch(.callEnded(reason))
+            self.hangingUp = false
+        }
     }
 
     func simulateDrop() {
