@@ -1,6 +1,7 @@
-//  Orb.metal — original "liquid glass orb" shader for the agent's presence.
-//  A 2D sphere with a flowing marble interior, fresnel rim, iridescent edge, specular glint,
-//  an audio-reactive wobbly silhouette and an outer halo. Palette comes from SwiftUI.
+//  Orb.metal — original "dark glass orb" shader for the agent's presence.
+//  A 2D sphere with a deep flowing interior and luminous veins, a glowing fresnel rim, iridescent edge,
+//  specular glint, an audio-reactive silhouette and an outer halo. Dark body so the white eyes read.
+//  Palette comes from SwiftUI (a: body, b: swirls, c: luminous accent, irid: rim sheen).
 
 #include <metal_stdlib>
 #include <SwiftUI/SwiftUI_Metal.h>
@@ -61,10 +62,10 @@ static float orbFbm(float2 p) {
     // edge so it never shows a square cut-off.
     if (r > 1.0) {
         float d = r - 1.0;
-        float halo = exp(-4.5 * d) * (0.22 + 0.30 * energy + 0.95 * level);
+        float halo = exp(-4.5 * d) * (0.16 + 0.24 * energy + 0.9 * level);
         float window = smoothstep(1.0, 0.80, r0);
-        float a = clamp(halo * window, 0.0, 1.0) * 0.8;
-        float3 hc = mix(cA, cB, 0.35 + 0.35 * level) * a;
+        float a = clamp(halo * window, 0.0, 1.0) * 0.75;
+        float3 hc = mix(cC, cI, 0.3 - 0.15 * level) * a;
         return half4(half3(hc), half(a));
     }
 
@@ -79,33 +80,38 @@ static float orbFbm(float2 p) {
     float f1 = orbFbm(q + warp * (1.1 + energy * 0.5));
     float f2 = orbFbm(q * 2.1 - float2(flow * 0.7, flow * 0.2) + warp);
 
-    float3 base = mix(cA, cB, smoothstep(0.28, 0.78, f1));
-    base = mix(base, cC, smoothstep(0.58, 0.95, f2) * 0.55);
+    // Deep body with swirls; luminous veins that light up while it talks.
+    float3 base = mix(cA, cB, smoothstep(0.30, 0.80, f1));
+    base = mix(base, cC, smoothstep(0.62, 0.95, f2) * (0.22 + 0.4 * level));
 
-    // Lighting: soft diffuse, depth, and an inner glow that brightens with the voice.
+    // Lighting: soft diffuse, depth, and a glow from within that rises with the voice.
     float diff = clamp(dot(n, L), 0.0, 1.0);
-    float3 col = base * (0.45 + 0.75 * diff);
+    float3 col = base * (0.55 + 0.6 * diff);
     float depth = smoothstep(-0.2, 1.0, -n.y * 0.6 + 0.4);
-    col = mix(col, col * 0.64, depth * 0.33);
-    col += cB * pow(z, 2.2) * (0.14 + 0.20 * energy + 0.65 * level);
+    col = mix(col, col * 0.7, depth * 0.3);
+    col += cC * pow(z, 3.0) * (0.03 + 0.05 * energy + 0.28 * level);
 
-    // Fresnel rim + slow iridescence.
-    float fres = pow(1.0 - z, 2.4);
-    col = mix(col, float3(1.0), fres * 0.45);
+    // Glowing fresnel rim in the accent colour + slow iridescent sheen.
+    float fres = pow(1.0 - z, 2.2);
+    col = mix(col, cC, fres * (0.5 + 0.3 * level));
     float iridBand = 0.5 + 0.5 * sin(ang * 2.0 + time * 0.4 + fres * 6.0);
-    col += cI * fres * (0.4 + 0.3 * iridBand);
+    col += cI * fres * (0.3 + 0.3 * iridBand);
 
-    // Specular glint + a softer secondary sparkle.
-    float3 H = normalize(L + V);
-    float spec = pow(max(dot(n, H), 0.0), 60.0);
-    col += spec * 0.85;
+    // Glassy specular glint up near the rim (kept away from the eyes) + a softer secondary sparkle.
+    float3 Ls = normalize(float3(-0.9, -1.1, 0.55));
+    float3 H = normalize(Ls + V);
+    float spec = pow(max(dot(n, H), 0.0), 70.0);
+    col += spec * 0.7;
     float2 g2 = uv / radius - float2(0.38, 0.42);
-    col += exp(-dot(g2, g2) * 90.0) * 0.14;
+    col += exp(-dot(g2, g2) * 90.0) * 0.08;
 
     // Static film grain (no per-frame flicker).
     col += (orbHash(position) - 0.5) * 0.025;
 
+    // Blend the silhouette straight into the halo's first ring (no dark seam at the edge).
     float edge = smoothstep(1.0, 0.975, r);
     col = clamp(col, 0.0, 1.0);
-    return half4(half3(col * edge), half(edge));
+    float haloA = clamp((0.16 + 0.24 * energy + 0.9 * level) * smoothstep(1.0, 0.80, r0), 0.0, 1.0) * 0.75;
+    float3 haloC = mix(cC, cI, 0.3 - 0.15 * level) * haloA;
+    return half4(half3(col * edge + haloC * (1.0 - edge)), half(edge + haloA * (1.0 - edge)));
 }

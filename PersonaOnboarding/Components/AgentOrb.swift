@@ -89,10 +89,12 @@ final class OrbMotion {
     }
 }
 
+/// a: deep body, b: its swirls, c: the luminous accent (veins, rim, halo, voice glow), irid: rim sheen.
+/// The body is dark on purpose so the white eyes always read clearly.
 struct OrbPalette {
     var a: Color, b: Color, c: Color, irid: Color
-    static let brand = OrbPalette(a: Theme.teal, b: Theme.aqua, c: Theme.ice, irid: Theme.iris)
-    static let unnamed = OrbPalette(a: Color(hex: 0x3A4A5C), b: Color(hex: 0xB9C7D6), c: Theme.ice, irid: Theme.iris)
+    static let brand = OrbPalette(a: Color(hex: 0x021418), b: Color(hex: 0x0A4650), c: Color(hex: 0x33D6CB), irid: Color(hex: 0x7B5CFF))
+    static let unnamed = OrbPalette(a: Color(hex: 0x0A0D13), b: Color(hex: 0x1F2A38), c: Color(hex: 0x8CA0B8), irid: Color(hex: 0x5A6886))
 }
 
 /// Two little eyes that blink, look around, and smile.

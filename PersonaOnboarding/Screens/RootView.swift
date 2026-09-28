@@ -18,6 +18,8 @@ struct RootView: View {
                 }
             }
             .blur(radius: model.callVisible || model.incomingCallVisible ? 18 : 0)
+            // Fully hidden behind a call: blurred chat bubbles read as grey smudges around the orb.
+            .opacity(model.callVisible || model.incomingCallVisible ? 0 : 1)
             .allowsHitTesting(!(model.callVisible || model.incomingCallVisible))
 
             if model.incomingCallVisible {

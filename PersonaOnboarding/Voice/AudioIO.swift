@@ -138,7 +138,7 @@ final class AudioIO {
     }
 
     private var categoryOptions: AVAudioSession.CategoryOptions {
-        wantsSpeaker ? [.defaultToSpeaker, .allowBluetooth] : [.allowBluetooth]
+        wantsSpeaker ? [.defaultToSpeaker, .allowBluetoothHFP] : [.allowBluetoothHFP]
     }
 
     /// Called a few times a second during the call: if the engine stopped or stopped rendering (iOS can do
