@@ -45,9 +45,10 @@ flowchart LR
 | Doesn't pick up (22 s) | "Missed call" event, friendly nudge by text |
 | Microphone denied | Explains once and continues by text |
 | Hangs up mid-call | Keeps what it learned and continues by text with only what's missing |
-| Network drops / app backgrounded / app killed | Treated as a dropped call; on relaunch the chat picks up and offers a call back |
-| Silence | Checks in after about 10 s ("Still with me?"), then ends gracefully after about 24 s and moves to text |
+| Network drops / app backgrounded / app killed | Treated as a dropped call; on relaunch the chat picks up and offers a call back (a drop during the goodbye counts as the planned ending) |
+| Silence | Checks in after about 10 s ("Still with me?"); if it stays quiet, says it'll text instead, hangs up, and continues in chat |
 | Talks over the agent | Playback stops instantly and the server is told what was actually heard |
+| Taps Connect Gmail while the agent is still talking | Acknowledged right after the current sentence |
 | Several answers at once / out of order | Extracts all of them |
 | "Actually call me Sam" / "rename yourself Kai" | Overwrites |
 | "I'm Leo" when asked to name the agent | Treated as the user's name; the agent still gets a name |
@@ -56,17 +57,21 @@ flowchart LR
 | Won't name the agent | Offers ideas, then picks a default ("Nova") that can be renamed |
 | Off-topic, privacy questions | Short honest answer (grounded in a fixed privacy fact sheet), then steers back |
 | Prompt injection / insults | Stays kind and in character, doesn't comply |
-| Speaks French, Arabic, Spanish… | Replies in their language (opening lines follow the device language) |
+| Speaks French, Arabic, Spanish… | Replies in their language and stays in it on the call, even after English system messages (opening lines follow the device language) |
 
 ## Stress testing
 
-Three layers, all runnable from a terminal:
+Four layers, from pure logic to the real app:
 
-1. **Unit tests** for the engine (17): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, and more. Run `swift test`.
+1. **Unit tests** for the engine (19): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, markup names, restored calls, language tracking, and more. Run `swift test`.
 2. **Chat stress test:** an LLM plays 12 difficult personas against the real engine and brain, the harness plays the app (declines, drops, Gmail taps), and a judge model grades each transcript. Run `OPENAI_API_KEY=… swift run stress`.
-3. **Voice stress test:** the exact realtime session config the app uses (exported from Swift), run against `gpt-realtime-2.1` with 8 difficult callers. Run `OPENAI_API_KEY=… node harness/voice-stress.mjs`.
+3. **Voice call simulation with real audio:** `swift run callsim` drives `gpt-realtime-2.1` with the real engine, prompts and tools, using the same event handling as the app. LLM callers answer *out loud*: their lines go through OpenAI TTS and stream into the input buffer like a live mic, so turn detection, transcription, barge-in, silence and hang-ups all run for real. The 12 callers include an interrupter, someone who goes quiet, someone who hangs up, a Gmail refuser, a skipper, a French speaker, a privacy skeptic and a troll. It needs Node (`cd harness && npm install`).
+4. **Autopilot caller in the app** (Tester tools → Autopilot caller): the same kind of AI caller talks to the agent through the real iOS audio path and UI, taps Connect Gmail, and continues by text if the call ends.
 
-Latest results: all 12 chat personas finish with the right details (9/12 also clear the strict judge bar), 7/8 voice callers pass, and chat turns take about 1.8 s median.
+Latest results:
+
+- **Chat:** all 12 personas finish with the right details, and 9/12 also clear the strict judge bar. Chat turns take about 1.8 s median.
+- **Voice (audio):** all 12 callers finish onboarding, and the median judge score is 9/10. The agent starts answering about 0.8 s (median) after the caller stops talking.
 
 ## Design
 
