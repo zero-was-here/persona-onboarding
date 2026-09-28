@@ -45,6 +45,8 @@ final class AudioIO {
 
     private var halfDuplex = true
     private var wantsSpeaker = true
+    /// Hardware formats the current engine was wired for (a change means the wiring must be rebuilt).
+    private var wiredFormats = ""
 
     private(set) var voiceProcessing = false
     private(set) var micChunks = 0
@@ -110,7 +112,7 @@ final class AudioIO {
         }
         running = true
         observe()
-        updateRoute()
+        applySpeakerRoute()
         print("[audio] started: \(info) · \(route)")
     }
 
@@ -151,9 +153,9 @@ final class AudioIO {
         let shouldBePlaying = now < playbackEnd
         lock.unlock()
         if !(engine?.isRunning ?? false) {
-            scheduleRebuild("engine stopped")
+            scheduleRecovery("engine stopped")
         } else if shouldBePlaying && sinceRender > 1.0 {
-            scheduleRebuild("output stalled")
+            scheduleRecovery("output stalled", forceRebuild: true)
         }
     }
 
@@ -206,6 +208,7 @@ final class AudioIO {
         halfDuplex = !vp   // no echo cancellation: never let the agent hear (and answer) itself
         lock.lock(); lastRender = CFAbsoluteTimeGetCurrent(); lock.unlock()
         let out = engine.outputNode.outputFormat(forBus: 0)
+        wiredFormats = Self.formatKey(engine)
         info = "in \(Int(inFormat.sampleRate)) Hz × \(inFormat.channelCount) · out \(Int(out.sampleRate)) Hz × \(out.channelCount) · echo cancel \(vp ? "on" : "off")\(halfDuplex ? " · half-duplex" : "")"
     }
 
@@ -220,30 +223,67 @@ final class AudioIO {
         self.player = nil
     }
 
-    private func scheduleRebuild(_ reason: String, delay: Double = 0.15) {
-        guard running, !rebuildPending else { return }
+    private static func formatKey(_ engine: AVAudioEngine) -> String {
+        let i = engine.inputNode.outputFormat(forBus: 0), o = engine.outputNode.outputFormat(forBus: 0)
+        return "\(i.sampleRate)/\(i.channelCount)>\(o.sampleRate)/\(o.channelCount)"
+    }
+
+    private var forceRebuildPending = false
+
+    private func scheduleRecovery(_ reason: String, delay: Double = 0.15, forceRebuild: Bool = false) {
+        guard running else { return }
+        forceRebuildPending = forceRebuildPending || forceRebuild
+        guard !rebuildPending else { return }
         rebuildPending = true
         // Coalesce the burst of notifications iOS sends for one change.
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
+            let force = self.forceRebuildPending
             self.rebuildPending = false
-            self.rebuild(reason)
+            self.forceRebuildPending = false
+            self.recover(reason, forceRebuild: force)
         }
     }
 
-    private func rebuild(_ reason: String) {
+    /// Bring audio back after iOS reconfigured it. If the hardware formats are unchanged, restarting the same
+    /// engine is enough (and keeps echo cancellation settled); otherwise build a fresh one. Either way, the
+    /// part of the agent's sentence that hadn't been heard is played again from where it stopped.
+    private func recover(_ reason: String, forceRebuild: Bool) {
         guard running else { return }
         let now = CFAbsoluteTimeGetCurrent()
         recentRebuilds = recentRebuilds.filter { now - $0 < 20 } + [now]
         if recentRebuilds.count > 8 {
-            print("[audio] too many rebuilds; leaving the engine as is")
+            print("[audio] too many recoveries; leaving the engine as is")
             return
         }
+        rebuilds += 1
+        let pending = unplayedAudio()
+        var how = "restarted"
+        if !forceRebuild, let engine, let player, Self.formatKey(engine) == wiredFormats {
+            player.stop()   // drop anything the stopped engine still holds, so nothing plays twice
+            do {
+                if !engine.isRunning { try engine.start() }
+                player.play()
+                lock.lock(); lastRender = CFAbsoluteTimeGetCurrent(); lock.unlock()
+            } catch {
+                print("[audio] restart failed (\(error.localizedDescription)); rebuilding")
+                how = rebuildEngine()
+            }
+        } else {
+            how = rebuildEngine()
+        }
+        applySpeakerRoute()
+        replay(pending)
+        var replayedFrames = 0
+        for b in pending { replayedFrames += Int(b.frameLength) }
+        let replayed = String(format: "%.1f", Double(replayedFrames) / 24_000)
+        print("[audio] \(how) (\(reason)): \(info) · \(route) · replayed \(replayed) s")
+    }
+
+    private func rebuildEngine() -> String {
         // Echo cancellation that keeps breaking on this device: fall back to the plain path.
         if voiceProcessing && recentRebuilds.count >= 4 { Self.voiceProcessingFailed = true }
         let useVP = Self.wantsVoiceProcessing && !Self.voiceProcessingFailed
-        rebuilds += 1
-        let pending = unplayedAudio()
         do {
             try buildEngine(voiceProcessing: useVP)
         } catch {
@@ -253,12 +293,7 @@ final class AudioIO {
                 try? buildEngine(voiceProcessing: false)
             }
         }
-        updateRoute()
-        replay(pending)
-        var replayedFrames = 0
-        for b in pending { replayedFrames += Int(b.frameLength) }
-        let replayed = String(format: "%.1f", Double(replayedFrames) / 24_000)
-        print("[audio] rebuilt (\(reason)): \(info) · \(route) · replayed \(replayed) s")
+        return "rebuilt"
     }
 
     // MARK: - Route
@@ -267,26 +302,31 @@ final class AudioIO {
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] note in
             guard let self, let changed = note.object as? AVAudioEngine, changed === self.engine else { return }
-            self.scheduleRebuild("hardware changed")
+            self.scheduleRecovery("hardware changed")
         })
         observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.routeChanged()
         })
         observers.append(nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.scheduleRebuild("media services reset", delay: 0.5)
+            self?.scheduleRecovery("media services reset", delay: 0.5, forceRebuild: true)
         })
     }
 
     private func routeChanged() {
         guard running else { return }
-        updateRoute()
-        // iOS sometimes falls back to the earpiece; if the user wants the speaker, move back.
+        applySpeakerRoute()
+        print("[audio] route: \(route)")
+    }
+
+    /// iOS can fall back to the earpiece (e.g. when echo cancellation starts); if the user wants the
+    /// speaker, move back. Only acts when actually on the earpiece, so it never causes route churn.
+    private func applySpeakerRoute() {
         let session = AVAudioSession.sharedInstance()
         if wantsSpeaker, session.currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
             try? session.overrideOutputAudioPort(.speaker)
-            updateRoute()
+            print("[audio] was on the earpiece; moved to the speaker")
         }
-        print("[audio] route: \(route)")
+        updateRoute()
     }
 
     private func updateRoute() {
