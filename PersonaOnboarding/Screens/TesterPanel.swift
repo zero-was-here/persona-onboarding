@@ -47,6 +47,27 @@ struct TesterPanel: View {
                         action("Restart onboarding", icon: "arrow.counterclockwise", enabled: true, destructive: true) { model.reset() }
                     }
 
+                    section("Autopilot caller") {
+                        Text("An AI caller talks to the agent end to end through the real app: it listens, answers out loud (OpenAI TTS into the mic path), taps Gmail, and continues by text if the call ends.")
+                            .font(Typo.sans(13)).foregroundStyle(Theme.muted)
+                        if let p = model.autopilot.running {
+                            HStack {
+                                Label("Running: \(p.title)", systemImage: "waveform.circle")
+                                    .font(Typo.sans(15, .medium)).foregroundStyle(Theme.aqua)
+                                Spacer()
+                                Button("Stop") { model.autopilot.stop() }
+                                    .font(Typo.sans(14, .semibold)).foregroundStyle(Theme.danger)
+                            }
+                        }
+                        Text(model.autopilot.status).font(Typo.mono(11, .regular)).foregroundStyle(Theme.body)
+                        ForEach(AutopilotCaller.personas) { p in
+                            action(p.title, icon: "person.wave.2", enabled: model.autopilot.running == nil && model.state.phase != .graduated) {
+                                model.showTester = false
+                                model.autopilot.start(p)
+                            }
+                        }
+                    }
+
                     if model.voice.status == .live {
                         section("Simulated caller (live call)") {
                             Text("Speaks through the same audio path as the microphone.")

@@ -15,6 +15,7 @@ final class AppModel {
     var showTester = false
     var simulateNoMic = false
     let voice = RealtimeVoice()
+    @ObservationIgnored private(set) var autopilot: AutopilotCaller!
 
     @ObservationIgnored private let engine: OnboardingEngine
     @ObservationIgnored private var brain: TextBrain
@@ -57,6 +58,7 @@ final class AppModel {
         }
         state = engine.state
         voice.onEvent = { [weak self] event in self?.handleVoice(event) }
+        autopilot = AutopilotCaller(model: self)
     }
 
     func onAppear() {
@@ -217,6 +219,7 @@ final class AppModel {
     func skip() { dispatch(.skipRequested) }
 
     func reset() {
+        autopilot.stop()
         ringTask?.cancel()
         brainTask?.cancel()
         brainTask = nil

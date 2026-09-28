@@ -162,41 +162,47 @@ final class RealtimeVoice {
         lastActivity = Date()
     }
 
+    /// True while the model is generating a response (for the autopilot caller's turn-taking).
+    var isResponding: Bool { responseActive }
+
     /// Tester tool: speaks `text` as the caller (OpenAI TTS → the same audio input path as the mic),
-    /// so the whole voice pipeline (VAD, transcription, tools, barge-in) can be exercised without a human.
+    /// so the whole voice pipeline (VAD, transcription, tools, barge-in) runs without a human.
     func simulateCaller(_ text: String) {
+        Task { await speakAsCaller(text) }
+    }
+
+    func speakAsCaller(_ text: String, voice ttsVoice: String = "ash") async {
         guard status == .live, !simulatingCaller else { return }
         simulatingCaller = true
-        let key = apiKey
-        Task { [weak self] in
-            defer { Task { @MainActor [weak self] in self?.simulatingCaller = false; self?.audio.pauseMic = false } }
-            var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/speech")!)
-            req.httpMethod = "POST"
-            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: [
-                "model": "gpt-4o-mini-tts", "voice": "ash", "input": text, "response_format": "pcm",
-            ])
-            guard let (pcm, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200, pcm.count > 0 else {
-                await MainActor.run { self?.lastError = "Simulated caller: TTS failed" }
-                return
-            }
-            await MainActor.run {
-                guard let self, self.status == .live else { return }
-                self.audio.pauseMic = true
-                // Stream like a microphone would: speech followed by ~1.2 s of silence so VAD ends the turn.
-                let silence = Data(count: 24_000 * 2 * 12 / 10)
-                let all = pcm + silence
-                var i = 0
-                while i < all.count {
-                    let end = min(i + 4_800, all.count)
-                    self.send(["type": "input_audio_buffer.append", "audio": all.subdata(in: i..<end).base64EncodedString()])
-                    i = end
-                }
-                self.lastActivity = Date()
-            }
-            try? await Task.sleep(for: .milliseconds(1500))
+        defer {
+            simulatingCaller = false
+            audio.pauseMic = false
+            lastActivity = Date()
+        }
+        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/speech")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": "gpt-4o-mini-tts", "voice": ttsVoice, "input": text, "response_format": "pcm",
+        ])
+        guard let (pcm, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200, pcm.count > 0 else {
+            lastError = "Simulated caller: TTS failed"
+            return
+        }
+        guard status == .live else { return }
+        audio.pauseMic = true
+        // Stream like a microphone would, in real time, then ~1.2 s of silence so VAD ends the turn.
+        let all = pcm + Data(count: 24_000 * 2 * 12 / 10)
+        var i = 0
+        while i < all.count, status == .live {
+            let end = min(i + 4_800, all.count)   // 100 ms of 24 kHz PCM16
+            send(["type": "input_audio_buffer.append", "audio": all.subdata(in: i..<end).base64EncodedString()])
+            i = end
+            lastActivity = Date()
+            try? await Task.sleep(for: .milliseconds(95))
         }
     }
 
