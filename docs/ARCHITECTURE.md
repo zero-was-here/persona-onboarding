@@ -88,6 +88,8 @@ The engine then applies guarantees on top of the model output: names go through 
 `RealtimeVoice` speaks the OpenAI Realtime API (`gpt-realtime-2.1`, voice `marin`) over a WebSocket.
 
 - **Turn-taking:** server-side `semantic_vad` with barge-in; noise reduction is `far_field` on speakerphone and `near_field` on a headset.
+- **Turn gate** (`TurnGate`, `PendingTurns`): the server doesn't answer turns by itself (`create_response: false`). Room noise sometimes trips turn detection, and a model asked to answer it invents what it "heard" ("Nice to meet you, Alex!" with nobody talking). The app requests a reply only once live captions show real words for the turn; they usually already do when the turn is committed, so this adds no delay. A turn with no words (or the multilingual gibberish speech-to-text produces for unintelligible audio) is deleted from the conversation and gets "Sorry, I didn't catch that?" (rate-limited), a "carry on" if it only cut the agent off, or nothing if it's steady noise (it then doesn't reset the silence timers). If speech-to-text fails or takes over 1.5 s, the voice model is trusted.
+- **Names nobody said:** `save_user_name` is refused if the name (or a close spelling, a spelled-out version, or a same-sounding one) doesn't appear in anything the user said or typed, including the live caption of the current turn; the agent corrects itself and asks again. A name proposed again after the user has spoken is accepted, so a real name that speech-to-text keeps mangling can't get stuck.
 - **Captions:** `gpt-live-transcribe`, primed with the agent's name and likely names so it hears "Ayman" rather than "amen"; the agent's own words are captioned from its exact output.
 - **Tools** (silent to the user): `save_user_name`, `save_help_need`, `rename_agent`, `show_gmail_connect`, `mark_declined`, `remember_request`, `finish_call`. Every tool result carries `still_needed` and `next`, so the agent stays on track without a script.
 - **Barge-in:** when the user talks over the agent, playback stops instantly and the server is told how much was actually heard (`conversation.item.truncate`).
@@ -126,7 +128,7 @@ The orb's motion is driven by the loudness of the audio **actually being played*
 ```
 PersonaOnboarding/
   App/          AppModel (effects, services), app entry
-  Core/         OnboardingEngine, Policy, Validation, BrainPrompts, TextBrain, models (pure Swift)
+  Core/         OnboardingEngine, Policy, Validation, TurnGate, BrainPrompts, TextBrain, models (pure Swift)
   Voice/        RealtimeVoice (Realtime API), AudioIO (audio engine), AutopilotCaller, SoundFX
   Gmail/        GoogleAuth (OAuth + PKCE), GmailConnectSheet
   Screens/      RootView (chat), CallViews (incoming call, call), HomeView, TesterPanel

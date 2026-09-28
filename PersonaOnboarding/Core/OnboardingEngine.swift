@@ -35,6 +35,8 @@ public enum OnboardingEvent: Equatable, Sendable {
     case callFailed(String)
     case callEnded(CallEndReason)
     case voiceTranscript(role: Message.Role, text: String)
+    /// What live captions have of the caller's current turn so far (checked before trusting a spoken name).
+    case voiceCaption(String)
     case voiceToolCall(name: String, arguments: String, callID: String)
     case gmailConnected(GmailConnection)
     case gmailCancelled
@@ -130,6 +132,10 @@ public final class OnboardingEngine {
             state.call.status = .active
             state.call.connectedAt = now()
             state.call.lastAliveAt = now()
+            state.call.unheardName = nil
+            state.call.unheardNameAt = nil
+            state.call.unheardNameRejections = nil
+            state.call.liveCaption = nil
             log("call connected")
             return [.haptic(.light)]
 
@@ -151,6 +157,11 @@ public final class OnboardingEngine {
                 noteLanguage(t)
                 if state.spokenLanguage != before, state.call.status == .active { return [.refreshVoiceInstructions] }
             }
+            return []
+
+        case .voiceCaption(let text):
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            state.call.liveCaption = t.isEmpty ? nil : t
             return []
 
         case .voiceToolCall(let name, let arguments, let callID):
@@ -300,6 +311,22 @@ public final class OnboardingEngine {
 
     // MARK: - Voice tools
 
+    /// Voice only: the model can "hear" a name in background noise ("Nice to meet you, Alex!" with nobody
+    /// talking). Accept a name the user said or typed at some point. So a real name can never get stuck
+    /// when speech-to-text keeps mangling it, the same name proposed again after the user has spoken since
+    /// is accepted, and after two misses anything is.
+    private func voiceNameWasHeard(_ n: String) -> Bool {
+        let said = state.transcript.filter { $0.role == .user }.map(\.text) + [state.profile.userName, state.call.liveCaption].compactMap { $0 }
+        if Validation.nameWasHeard(n, in: said) { return true }
+        if (state.call.unheardNameRejections ?? 0) >= 2 { return true }
+        if let pending = state.call.unheardName, let asked = state.call.unheardNameAt,
+           Validation.nameWasHeard(n, in: [pending]),
+           state.transcript.contains(where: { $0.role == .user && $0.channel == .voice && $0.date > asked }) {
+            return true
+        }
+        return false
+    }
+
     private func handleVoiceTool(name: String, arguments: String, callID: String) -> [OnboardingEffect] {
         let args = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any] ?? [:]
         var result: [String: Any] = ["ok": true]
@@ -308,7 +335,16 @@ public final class OnboardingEngine {
 
         switch name {
         case "save_user_name":
-            if let n = Validation.cleanName(args["name"] as? String) {
+            if let n = Validation.cleanName(args["name"] as? String), !voiceNameWasHeard(n) {
+                // Nobody said it: the model "heard" a name in noise. Don't save it; ask once more.
+                state.call.unheardName = n
+                state.call.unheardNameAt = now()
+                state.call.unheardNameRejections = (state.call.unheardNameRejections ?? 0) + 1
+                log("name not heard in anything the user said: \(n)")
+                result = ["ok": false, "error": "not_heard",
+                          "note": "Nobody actually said that name: it didn't come through on the line. Don't use it or say it. Ask simply, once: \"Sorry, what should I call you?\""]
+                effects.append(.voiceSystemNote("App note: the caller never said the name \(n); it came from noise on the line and wasn't saved. Don't use it. If you already said it, correct yourself in a few words (\"Sorry, I misheard\") and ask what to call them."))
+            } else if let n = Validation.cleanName(args["name"] as? String) {
                 state.profile.userName = n
                 state.profile.declined.remove(.userName)
                 result["saved"] = ["user_name": n]

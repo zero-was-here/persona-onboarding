@@ -421,6 +421,8 @@ final class AppModel {
         case .transcript(let role, let text):
             dispatch(.voiceTranscript(role: role, text: text))
         case .toolCall(let name, let arguments, let callID):
+            // The voice model can act on a turn before its full transcript lands: give the engine the live caption.
+            if name == "save_user_name" { dispatch(.voiceCaption(voice.userCaption)) }
             dispatch(.voiceToolCall(name: name, arguments: arguments, callID: callID))
             if name == "save_user_name" { voice.correctUserCaption(name: state.profile.userName) }
         case .ended(let reason):

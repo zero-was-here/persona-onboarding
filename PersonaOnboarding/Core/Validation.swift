@@ -77,6 +77,52 @@ public enum Validation {
         return out.joined(separator: " ")
     }
 
+    /// Did the user actually say (or type) this name? True if it, or something close to it, appears in any
+    /// of `texts`: same letters ignoring case and accents, spelled out ("A-H-M-E-D"), a small typo, or
+    /// a same-sounding spelling (Soundex: "Siobhan" / "Shivon"). Loose on purpose: it only has to catch
+    /// names nobody said, which the voice model can "hear" in background noise.
+    public static func nameWasHeard(_ name: String, in texts: [String]) -> Bool {
+        let parts = fold(name).split(whereSeparator: { !$0.isLetter }).map(String.init).filter { $0.count >= 2 }
+        guard let target = parts.first else { return true }
+        for text in texts {
+            var words = fold(text).split(whereSeparator: { !$0.isLetter }).map(String.init)
+            // Spelled out letter by letter ("A-H-M-E-D", "a h m e d"): join runs of single letters.
+            var run = ""
+            for w in words + [""] {
+                if w.count == 1 { run += w } else { if run.count >= 2 { words.append(run) }; run = "" }
+            }
+            for word in words where word.count >= 2 {
+                if levenshtein(word, target) <= (target.count <= 4 ? 1 : 2) { return true }
+                if target.count >= 5, word.first == target.first, let a = soundex(word), a == soundex(target) { return true }
+            }
+        }
+        return false
+    }
+
+    static func fold(_ s: String) -> String {
+        s.folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: nil).lowercased()
+    }
+
+    /// Classic American Soundex for Latin letters (nil for other scripts).
+    static func soundex(_ s: String) -> String? {
+        let codes: [Character: Character] = [
+            "b": "1", "f": "1", "p": "1", "v": "1",
+            "c": "2", "g": "2", "j": "2", "k": "2", "q": "2", "s": "2", "x": "2", "z": "2",
+            "d": "3", "t": "3", "l": "4", "m": "5", "n": "5", "r": "6",
+        ]
+        let letters = Array(fold(s).filter { $0.isASCII && $0.isLetter })
+        guard let first = letters.first else { return nil }
+        var out = String(first)
+        var last = codes[first]
+        for c in letters.dropFirst() {
+            let code = codes[c]
+            if let code, code != last { out.append(code) }
+            if c != "h" && c != "w" { last = code }
+            if out.count == 4 { break }
+        }
+        return out.padding(toLength: 4, withPad: "0", startingAt: 0)
+    }
+
     static func levenshtein(_ a: String, _ b: String) -> Int {
         let a = Array(a), b = Array(b)
         if a.isEmpty { return b.count }

@@ -171,6 +171,18 @@ public enum BrainPrompts {
         """
     }
 
+    /// What the agent is told when turn detection fired but speech-to-text heard no words (see TurnGate).
+    public static func noiseNote(_ decision: TurnGate.Decision) -> String? {
+        switch decision {
+        case .sayUnclear:
+            return "App note: the line picked up a sound, but no words came through (noise, or too quiet to make out). Say only a short \"Sorry, I didn't catch that?\" in the language you've been speaking. Don't guess what they said, don't use a name, don't move on."
+        case .resume:
+            return "App note: a noise on the line cut you off, but the caller didn't say anything. Pick up where you left off in a few words; don't start over and don't mention the noise."
+        case .respond, .ignore:
+            return nil
+        }
+    }
+
     /// Context for the speech-to-text model behind the live captions (it mishears names without it).
     public static func transcriptionPrompt(_ s: OnboardingState) -> String {
         var p = "A person is on a phone call with their new AI assistant"

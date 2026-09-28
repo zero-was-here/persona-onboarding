@@ -4,7 +4,7 @@ The trial brief says the onboarding will be stress-tested, so it was tested in f
 
 | Layer | What it proves | Command |
 |---|---|---|
-| Unit tests | The engine's guarantees: call outcomes, idempotent hang-ups, corrections, refusals, skipping, injected markup, restored calls, language, kept promises, call-back greetings | `swift test` |
+| Unit tests | The engine's guarantees: call outcomes, idempotent hang-ups, corrections, refusals, skipping, injected markup, restored calls, language, kept promises, call-back greetings, noise on the line, names nobody said | `swift test` |
 | Chat stress test | The text brain + engine handle 12 difficult people end to end | `OPENAI_API_KEY=… swift run stress` |
 | Voice call simulation | The real voice model, tools and turn-taking handle 15 difficult callers, **with real audio** | `OPENAI_API_KEY=… swift run callsim` |
 | Autopilot caller (in the app) | The same through the real iOS UI and audio path | Tester tools → Autopilot caller |
@@ -17,14 +17,16 @@ Plus real calls on an iPhone, which is the only place the echo cancellation and 
 swift test
 ```
 
-24 tests in `Tests/OnboardingCoreTests/EngineTests.swift`, for example:
+28 tests in `Tests/OnboardingCoreTests/EngineTests.swift`, for example:
 
 - naming triggers exactly one automatic call; a declined call never auto-rings again, but the user can always ask for one;
 - hanging up mid-call keeps what was collected, and a late "socket closed" doesn't double-handle the end;
 - "everything at once" graduates as soon as Gmail connects; early graduation needs a help need but never traps anyone;
 - corrections overwrite, junk and markup names are rejected, an injected `<script>` name is refused and never shown;
 - a call restored after the app was killed ends at the last sign of life, not hours later;
-- promises made mid-onboarding are delivered once after graduation; the "it's X again" greeting only happens on a later call.
+- promises made mid-onboarding are delivered once after graduation; the "it's X again" greeting only happens on a later call;
+- the turn gate answers only real words: noise gets one "didn't catch that", steady noise is ignored, gibberish transcripts don't count, code-switching does;
+- a name nobody said ("Alex" out of background noise) is refused, while a real name that speech-to-text mangles is accepted once the user repeats it.
 
 ## 2. Chat stress test
 
@@ -52,7 +54,7 @@ CONCURRENCY=6 VOICE_MODEL=gpt-realtime-2.1 swift run callsim   # optional knobs
 
 Callers: cooperative, all-at-once, changes their mind, Gmail refuser, skipper, wants to text (noisy bus), French speaker, troll, interrupter, goes quiet, hangs up, hangs up mid-sentence, asks for code (out of scope), asks for an email draft mid-call, privacy skeptic.
 
-**Latest:** all 15 finish onboarding; judge scores 6–10 (median 9/10); the agent starts answering ~1.1 s (median) after the caller stops talking. The strict bar flags 4: one transient socket drop (recovered into chat), a name spelled "Yousef" by speech-to-text, one long privacy answer, and the judge marking the agent down for declining to write code (intended).
+**Latest (with the turn gate):** all 15 finish onboarding; judge scores 5–10 (median 9/10); 12/15 clear the strict bar; the agent starts answering ~1.0 s (median) after the caller stops talking, the same as before the gate. The 3 flagged: two calls where the server closed the socket mid-call (both carried on in chat and finished), and a name heard as "Nia" instead of "Mia".
 
 ## 4. Autopilot caller (in the app)
 
@@ -65,9 +67,10 @@ Personas: Cooperative, Everything at once, Changes their mind, Refuses Gmail, Im
 - Let the agent finish its first sentence, then talk over it loudly: it should stop and listen.
 - Stay silent: a check-in after ~10 s, a spoken goodbye after ~24 s, then the chat continues.
 - Make a random noise: "Sorry, I didn't catch that?"
+- Answer the call and say nothing in a noisy room: no invented name or need, just "didn't catch that", "Still with me?", then the chat. (Before the turn gate, the Simulator on a Mac produced "Nice to meet you, Alex!" here.)
 - Say your name and hang up immediately: the chat shouldn't ask for it again.
 - Ask for code: an honest "not something I do", then back on track.
 - Ask it to draft an email to your landlord mid-call: it arrives in the chat right after onboarding.
 - Toggle speaker ↔ phone mid-sentence: audio continues.
 - Tester tools → "Drop the call" / "Pretend microphone is denied": the chat picks up.
-- Tester tools → Models shows voice diagnostics (route, echo cancellation, output peak, rebuilds, echo held, barge-ins).
+- Tester tools → Models shows voice diagnostics (route, echo cancellation, output peak, rebuilds, echo held, barge-ins, noise turns).

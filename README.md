@@ -4,6 +4,31 @@ A native iOS (SwiftUI) take on Persona's onboarding. A brand-new assistant gets 
 
 > Built for the Persona CTO trial by Ahmed Aymane Alexander El Jebari.
 
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/01-naming.png" width="250" alt="Naming the assistant in the chat"></td>
+    <td align="center"><img src="docs/screenshots/02-incoming-call.png" width="250" alt="The assistant calls you"></td>
+    <td align="center"><img src="docs/screenshots/03-call.png" width="250" alt="On the call: the orb and live captions"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>1.</b> Name it by text</td>
+    <td align="center"><b>2.</b> It calls you</td>
+    <td align="center"><b>3.</b> A real conversation</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/04-all-set.png" width="250" alt="Name, need and Gmail collected: the orb smiles"></td>
+    <td align="center"><img src="docs/screenshots/05-home.png" width="250" alt="Home screen built from what it learned"></td>
+    <td align="center"><img src="docs/screenshots/06-tester-tools.png" width="250" alt="Tester tools with the autopilot caller and live state"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>4.</b> Name, need, Gmail: done</td>
+    <td align="center"><b>5.</b> You're in</td>
+    <td align="center"><b>6.</b> Tester tools for reviewers</td>
+  </tr>
+</table>
+
+<sub>Captured from the app running in the iOS Simulator (iPhone 17). Shots 4–6 come from an Autopilot caller run, so the Gmail address is its demo connection.</sub>
+
 ## The flow
 
 1. **Name your assistant** in the chat (tap a suggestion or type one). The opening lines type themselves out like a chat model writing.
@@ -65,7 +90,7 @@ flowchart LR
 - **One brain, two channels.** Chat and call read and write the same `OnboardingState`. The call transcript lands in the chat, so switching channels never loses anything and the agent never re-asks.
 - **LLM for language, code for guarantees.** The model understands messy input and writes the replies; a deterministic `Policy` decides what's still missing, when to ring, and when someone may skip ahead. A model that says "we're done" early is overruled, and a name like `<script>` is rejected before it's stored.
 - **Text turns are a single structured-output call.** Reply, extracted fields, intent and action come back in one JSON object, so there's no second round-trip for tool calls. There's a fallback model if the first one errors.
-- **The voice call** uses the Realtime API over a WebSocket: semantic turn detection, live captions (`gpt-live-transcribe`), barge-in with truncation, function tools (`save_user_name`, `save_help_need`, `show_gmail_connect`, `mark_declined`, `rename_agent`, `remember_request`, `finish_call`), and a spoken goodbye before hanging up. Tool results carry the next step, so the agent stays on track without a script.
+- **The voice call** uses the Realtime API over a WebSocket: semantic turn detection, live captions (`gpt-live-transcribe`), a turn gate (the agent answers only once live captions confirm real words, never background noise), barge-in with truncation, function tools (`save_user_name`, `save_help_need`, `show_gmail_connect`, `mark_declined`, `rename_agent`, `remember_request`, `finish_call`), and a spoken goodbye before hanging up. Tool results carry the next step, so the agent stays on track without a script.
 
 ### Resilience matrix
 
@@ -78,7 +103,7 @@ flowchart LR
 | Network drops / app backgrounded / app killed | Treated as a dropped call; on relaunch the chat picks up and offers a call back (a drop during the goodbye counts as the planned ending) |
 | Silence | Checks in after about 10 s ("Still with me?"); if it stays quiet, says it'll text instead, hangs up, and continues in chat |
 | Talks over the agent | Playback stops instantly and the server is told what was actually heard. An echo guard keeps the agent's own voice (leaking from the speaker) from counting as the user talking |
-| A noise, a mumble, background voices | "Sorry, I didn't catch that?", never a guess (and never a made-up name) |
+| A noise, a mumble, background voices | The agent only answers once live captions confirm real words. A wordless turn gets "Sorry, I didn't catch that?" (never a guess), steady noise is ignored, and a name nobody said is never saved |
 | Asks for something outside its job (code, an app, a game) | Says honestly it can't and offers the closest thing it can do. No false promises |
 | Asks for something it can do, just not on a call (an email draft) | Promises it for the chat, remembers it, and delivers it right after onboarding ("As promised, here's…") |
 | Taps Connect Gmail while the agent is still talking | Acknowledged right after the current sentence |
@@ -97,7 +122,7 @@ flowchart LR
 
 Four layers, from pure logic to the real app (details and commands in [docs/TESTING.md](docs/TESTING.md)):
 
-1. **Unit tests** for the engine (24): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, injected markup (refused, never echoed), restored calls, language tracking, kept promises, call-back greetings, and more. Run `swift test`.
+1. **Unit tests** for the engine (28): call outcomes, idempotent hang-ups, corrections, refusals, early graduation, injected markup (refused, never echoed), restored calls, language tracking, kept promises, call-back greetings, noise on the line (the turn gate), names nobody said, and more. Run `swift test`.
 2. **Chat stress test:** an LLM plays 12 difficult personas against the real engine and brain, the harness plays the app (declines, drops, Gmail taps), and a judge model grades each transcript. Run `OPENAI_API_KEY=… swift run stress`.
 3. **Voice call simulation with real audio:** `swift run callsim` drives `gpt-realtime-2.1` with the real engine, prompts and tools, using the same event handling as the app. LLM callers answer *out loud*: their lines go through OpenAI TTS and stream into the input buffer like a live mic, so turn detection, transcription, barge-in, silence and hang-ups all run for real. The 15 callers include an interrupter, someone who goes quiet, two who hang up (one mid-sentence), a Gmail refuser, a skipper, a French speaker, a privacy skeptic, a troll, someone who asks for code (out of scope) and someone who asks for an email draft mid-call (delivered after onboarding). It needs Node (`cd harness && npm install`).
 4. **Autopilot caller in the app** (Tester tools → Autopilot caller): the same kind of AI caller talks to the agent through the real iOS audio path and UI, taps Connect Gmail, and continues by text if the call ends.
@@ -105,7 +130,8 @@ Four layers, from pure logic to the real app (details and commands in [docs/TEST
 Latest results:
 
 - **Chat:** all 12 personas finish, and 10/12 also clear the strict judge bar (one agent name picked by the agent instead of the persona, one privacy answer over the word limit). Chat turns take about 1.8 s median.
-- **Voice (audio simulation):** all 15 callers finish onboarding, with judge scores of 6–10 (median 9/10). The agent starts answering about 1.1 s (median) after the caller stops talking. The strict bar flags 4 of 15: one transient socket drop (it recovered into chat), a name spelled "Yousef" by speech-to-text, one long privacy answer, and the judge marking the agent down for declining to write code (intended).
+- **Voice (audio simulation):** all 15 callers finish onboarding, with judge scores of 5–10 (median 9/10), and 12 of 15 clear the strict bar. The agent starts answering about 1.0 s (median) after the caller stops talking; the turn gate added no delay, because live captions already have the words when a turn ends. The 3 flagged: two calls where the server closed the socket mid-call (both carried on in chat and finished), and one name heard as "Nia" instead of "Mia".
+- **Noise (Simulator, Mac microphone, nobody talking):** before the turn gate, room noise was answered as if someone had spoken ("Nice to meet you, Alex!", and a made-up need). With it, the same silent call gets "Sorry, I didn't catch that?", one "Still with me?", then continues in chat. Nothing is saved.
 - **In the app (Simulator, Autopilot caller):** all 8 personas finish end to end through the real UI and audio path, in about 30–75 s per call.
 
 ## Design
@@ -138,6 +164,7 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Captions show the agent, not you.** The call screen captions the agent's exact words. The user's speech isn't echoed back live, because speech-to-text can mishear any word (names especially); the agent's reply already shows what it understood. The call transcript still lands in the chat, with the user's name corrected once it's saved.
 - **API key on the device (gitignored `Secrets.json` or pasted in Tester tools).** Fine for a prototype. Production would mint short-lived realtime tokens from a small backend.
 - **An echo guard on top of Apple's echo cancellation.** On speakerphone some of the agent's voice still leaks into the mic (most at the start of a call). The server then thought the user spoke, and the agent cut itself off or "heard" words nobody said. While the agent talks, only speech clearly louder than that leak, lasting ~150 ms, gets through; nothing does during its first sentence. The cost: to interrupt, you speak up a little.
+- **The agent answers words, not noise.** Turn detection sometimes fires on room noise, and a model asked to answer that invents what it "heard". So the server no longer answers turns by itself. The app asks for a reply once live captions show real words (usually already there when the turn ends, so no added delay). A wordless turn gets "Sorry, I didn't catch that?" (at most every 15 s, then silence), a turn that only cut the agent off lets it carry on, and a name that nobody said or typed is refused and asked again (a real name that speech-to-text keeps mangling is accepted the second time).
 - **It knows its limits.** One capabilities sheet feeds the call, the onboarding chat and the main chat. Out-of-scope asks (code, apps, games) get an honest "not something I do" plus the closest thing it can do. In-scope asks that don't fit a call (an email draft) are promised and then delivered in the chat right after onboarding.
 
 ## What's next

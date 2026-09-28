@@ -200,6 +200,14 @@ actor CallSim {
     private var gmailShows = 0
     private var gmailTappedForShow = 0
     private var spokenAtGmailShow = 0
+    // Turn gate, same as the app (see TurnGate): the agent only answers turns speech-to-text heard words in.
+    private var gate = TurnGate()
+    private var turns = PendingTurns()
+    private var turnTimeoutGen = 0
+    private var activityBeforeTurn = Date()
+    private var nudgedBeforeTurn = false
+    private(set) var noiseTurns = 0
+    private var liveCaption = ""
 
     private(set) var timeline: [String] = []
     private(set) var errors: [String] = []
@@ -329,7 +337,7 @@ actor CallSim {
                     "audio": [
                         "input": [
                             "format": ["type": "audio/pcm", "rate": 24_000],
-                            "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": true, "interrupt_response": true],
+                            "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": false, "interrupt_response": true],
                             "transcription": ["model": "gpt-live-transcribe"],
                             "noise_reduction": ["type": "near_field"],
                         ],
@@ -357,8 +365,58 @@ actor CallSim {
     private func injectSystem(_ text: String) {
         guard status == .live else { return }
         link?.send(["type": "conversation.item.create", "item": ["type": "message", "role": "system", "content": [["type": "input_text", "text": text]]]])
-        if responseActive { respondAfterCurrent = true } else { link?.send(["type": "response.create"]) }
+        if responseActive || userSpeaking || !turns.isEmpty { respondAfterCurrent = true } else { link?.send(["type": "response.create"]) }
         lastActivity = Date()
+    }
+
+    // MARK: Turn gate (what RealtimeVoice.decideTurnIfReady does)
+
+    private func armTurnTimeout() {
+        turnTimeoutGen += 1
+        let gen = turnTimeoutGen
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await self?.turnTimedOut(gen)
+        }
+    }
+
+    private func turnTimedOut(_ gen: Int) async {
+        guard gen == turnTimeoutGen else { return }
+        turns.timedOut()
+        await decideTurnIfReady(timedOut: true)
+    }
+
+    private func decideTurnIfReady(timedOut: Bool = false) async {
+        guard !userSpeaking, let ready = turns.takeReady() else { return }
+        turnTimeoutGen += 1
+        guard status == .live, pendingHangUp == nil else { return }
+        let decision = gate.decide(heardWords: ready.heardWords, interruptedAgent: ready.cutAgentOff)
+        switch decision {
+        case .respond:
+            if timedOut { log("[gate: speech-to-text slow → answering anyway]") }
+            requestResponse()
+        case .sayUnclear, .resume:
+            noiseTurns += 1
+            log("[gate: no words heard → \(decision == .resume ? "agent picks up where it was cut off" : "agent says it didn't catch that")]")
+            if let note = BrainPrompts.noiseNote(decision) {
+                link?.send(["type": "conversation.item.create", "item": ["type": "message", "role": "system", "content": [["type": "input_text", "text": note]]]])
+            }
+            requestResponse(allowTools: false)
+        case .ignore:
+            noiseTurns += 1
+            log("[gate: no words heard again → ignored]")
+            lastActivity = activityBeforeTurn
+            nudgedForSilence = nudgedBeforeTurn
+            if respondAfterCurrent && !responseActive { requestResponse() }
+        }
+    }
+
+    private func requestResponse(allowTools: Bool = true) {
+        if responseActive { respondAfterCurrent = true; return }
+        respondAfterCurrent = false
+        var event: [String: Any] = ["type": "response.create"]
+        if !allowTools { event["response"] = ["tool_choice": "none"] }
+        link?.send(event)
     }
 
     private func handle(_ text: String) async {
@@ -374,6 +432,13 @@ actor CallSim {
                 link?.send(["type": "response.create"])
             }
         case "input_audio_buffer.speech_started":
+            let item = obj["item_id"] as? String ?? UUID().uuidString
+            if turns.started(item, agentBusy: isPlaying || responseActive) {
+                activityBeforeTurn = lastActivity
+                nudgedBeforeTurn = nudgedForSilence
+            }
+            turnTimeoutGen += 1
+            liveCaption = ""
             userSpeaking = true
             awaitingUserTranscript = true
             lastActivity = Date()
@@ -391,13 +456,33 @@ actor CallSim {
             userSpeaking = false
             lastActivity = Date()
             lastSpeechStop = Date()
+        case "input_audio_buffer.committed":
+            if let item = obj["item_id"] as? String { turns.committed(item) }
+            armTurnTimeout()
+            await decideTurnIfReady()
+        case "conversation.item.input_audio_transcription.delta":
+            if let item = obj["item_id"] as? String, let d = obj["delta"] as? String { turns.partialTranscript(item, d); liveCaption += d }
         case "conversation.item.input_audio_transcription.completed":
             let t = (obj["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty {
+            let words = TurnGate.hasWords(t)
+            liveCaption = words ? t : ""
+            if words {
                 log("   heard (transcription): \(t)")
                 await apply(engine.handle(.voiceTranscript(role: .user, text: t)))
+            } else {
+                log("   heard (transcription): no words\(t.isEmpty ? "" : " (\(t))")")
             }
             awaitingUserTranscript = false
+            if let item = obj["item_id"] as? String {
+                turns.transcribed(item, t)
+                if !words { link?.send(["type": "conversation.item.delete", "item_id": item]) }
+            }
+            await decideTurnIfReady()
+        case "conversation.item.input_audio_transcription.failed":
+            awaitingUserTranscript = false
+            log("   [transcription failed]")
+            if let item = obj["item_id"] as? String { turns.failed(item) }
+            await decideTurnIfReady()
         case "response.created":
             if goodbyeRequested && !goodbyeStarted { goodbyeStarted = true }
             responseActive = true
@@ -438,7 +523,10 @@ actor CallSim {
             let args = obj["arguments"] as? String ?? "{}"
             toolCalls.append("\(name)(\(args))")
             log("   tool: \(name) \(args)")
+            if name == "save_user_name" { await apply(engine.handle(.voiceCaption(liveCaption))) }
+            let rejectedBefore = engine.state.call.unheardNameRejections ?? 0
             await apply(engine.handle(.voiceToolCall(name: name, arguments: args, callID: obj["call_id"] as? String ?? "")))
+            if (engine.state.call.unheardNameRejections ?? 0) > rejectedBefore { log("   [engine: nobody said that name → not saved, agent asks again]") }
         case "response.done":
             responseActive = false
             if goodbyeStarted && !goodbyeFinished { goodbyeFinished = true }
@@ -449,8 +537,12 @@ actor CallSim {
                     link?.send(["type": "response.create", "response": ["instructions": goodbyeInstructions, "tool_choice": "none"]])
                 }
             } else if status == .live && (respondAfterCurrent || (responseHadToolCall && !responseTranscript.contains("?"))) {
-                respondAfterCurrent = false
-                link?.send(["type": "response.create"])
+                if userSpeaking || !turns.isEmpty {
+                    respondAfterCurrent = true
+                } else {
+                    respondAfterCurrent = false
+                    link?.send(["type": "response.create"])
+                }
             }
         case "error":
             let err = obj["error"] as? [String: Any]

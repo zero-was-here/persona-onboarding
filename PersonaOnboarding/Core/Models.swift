@@ -122,6 +122,13 @@ public struct CallInfo: Codable, Equatable, Sendable {
     public var lastAliveAt: Date?
     /// The user told us they don't want calls. Only call again if they ask.
     public var userPrefersText = false
+    /// This call: a name the voice model wanted to save that nobody seems to have said, and when it was
+    /// turned down (optional so state saved by older builds still decodes).
+    public var unheardName: String?
+    public var unheardNameAt: Date?
+    public var unheardNameRejections: Int?
+    /// Live captions of the caller's current turn (the full transcript can land after the voice model acts on it).
+    public var liveCaption: String?
     public init() {}
 }
 

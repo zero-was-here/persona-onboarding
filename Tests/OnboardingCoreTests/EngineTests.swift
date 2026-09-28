@@ -37,6 +37,7 @@ final class EngineTests: XCTestCase {
         e.handle(.textBrainReplied(TextTurn(reply: "Great name", agentName: "Juno")))
         e.handle(.callAnswered)
         e.handle(.callConnected)
+        e.handle(.voiceTranscript(role: .user, text: "I'm Sara"))
         e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"sara"}"#, callID: "c1"))
         let fx = e.handle(.callEnded(.userHungUp))
         XCTAssertTrue(fx.contains(.disconnectVoice))
@@ -71,6 +72,7 @@ final class EngineTests: XCTestCase {
         // On the call: "can you draft an email to my landlord about the heater?" → promised for the chat.
         e.handle(.voiceToolCall(name: "remember_request", arguments: #"{"request":"an email to the landlord about the broken heater"}"#, callID: "r1"))
         XCTAssertEqual(e.state.laterRequests, ["an email to the landlord about the broken heater"])
+        e.handle(.voiceTranscript(role: .user, text: "I'm Sam, and I need help with my inbox."))
         e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Sam"}"#, callID: "c1"))
         e.handle(.voiceToolCall(name: "save_help_need", arguments: #"{"summary":"inbox","category":"email"}"#, callID: "c2"))
         e.handle(.gmailConnected(GmailConnection(email: "sam@gmail.com", isSimulated: true)))
@@ -144,7 +146,9 @@ final class EngineTests: XCTestCase {
         e.handle(.textBrainReplied(TextTurn(reply: "ok", agentName: "Atlas")))
         e.handle(.callAnswered); e.handle(.callConnected)
         e.handle(.voiceToolCall(name: "rename_agent", arguments: #"{"name":"Kai"}"#, callID: "1"))
+        e.handle(.voiceTranscript(role: .user, text: "My name is Samantha."))
         e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Samantha"}"#, callID: "2"))
+        e.handle(.voiceTranscript(role: .user, text: "Actually, just call me Sam."))
         e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Sam"}"#, callID: "3"))
         XCTAssertEqual(e.state.profile.agentName, "Kai")
         XCTAssertEqual(e.state.profile.userName, "Sam")
@@ -306,5 +310,101 @@ final class EngineTests: XCTestCase {
         let note = fx.compactMap { if case .voiceSystemNote(let t) = $0 { return t } else { return nil } }.first ?? ""
         XCTAssertTrue(note.contains("23 labels") && note.contains("Receipts"), note)
         XCTAssertEqual(e.state.profile.gmail?.isSimulated, false)
+    }
+
+    // MARK: - Noise on the line (phantom turns and phantom names)
+
+    func testTurnGateAnswersOnlyRealWords() {
+        var gate = TurnGate()
+        let t0 = Date()
+        XCTAssertEqual(gate.decide(heard: "Hi, I'm Karim.", interruptedAgent: false, now: t0), .respond)
+        XCTAssertEqual(gate.decide(heard: "", interruptedAgent: false, now: t0), .sayUnclear, "noise gets an honest 'didn't catch that'")
+        XCTAssertEqual(gate.decide(heard: "[noise]", interruptedAgent: false, now: t0.addingTimeInterval(3)), .ignore, "not twice in a row within the cooldown")
+        XCTAssertEqual(gate.decide(heard: "Mm-hmm.", interruptedAgent: false, now: t0.addingTimeInterval(5)), .respond)
+        XCTAssertEqual(gate.decide(heard: "", interruptedAgent: true, now: t0.addingTimeInterval(6)), .resume, "cut off by noise: carry on")
+        XCTAssertEqual(gate.decide(heard: "", interruptedAgent: false, now: t0.addingTimeInterval(30)), .sayUnclear)
+        XCTAssertEqual(gate.decide(heard: "", interruptedAgent: false, now: t0.addingTimeInterval(60)), .ignore, "steady noise doesn't make the agent chatter")
+        XCTAssertEqual(gate.decide(heard: "ok", interruptedAgent: false, now: t0.addingTimeInterval(61)), .respond)
+        // What counts as words.
+        XCTAssertFalse(TurnGate.hasWords(""))
+        XCTAssertFalse(TurnGate.hasWords(" ... "))
+        XCTAssertFalse(TurnGate.hasWords("(coughs) [inaudible]"))
+        XCTAssertFalse(TurnGate.hasWords("अबneamth wahمسل يعني meruhna ya"), "gibberish from unintelligible audio mixes scripts inside words")
+        XCTAssertTrue(TurnGate.hasWords("سلام, I'm Ahmed"), "code-switching keeps each word in one script")
+        XCTAssertTrue(TurnGate.hasWords("Je m'appelle Chloé"))
+        XCTAssertTrue(TurnGate.hasWords("42"))
+    }
+
+    func testPendingTurnsWaitForSpeechToText() {
+        var turns = PendingTurns()
+        turns.started("a", agentBusy: false)
+        turns.committed("a")
+        XCTAssertNil(turns.takeReady(), "no transcript yet")
+        turns.transcribed("a", "")
+        XCTAssertEqual(turns.takeReady()?.heardWords, false)
+        XCTAssertTrue(turns.isEmpty)
+        // Live captions already have words at commit: answer right away.
+        turns.started("b", agentBusy: true)
+        turns.partialTranscript("b", " Hi, I'm")
+        turns.committed("b")
+        let ready = turns.takeReady()
+        XCTAssertEqual(ready?.heardWords, true)
+        XCTAssertEqual(ready?.cutAgentOff, true)
+        // Two quick turns: one with words is enough; a failure or a timeout trusts the voice model.
+        turns.started("c", agentBusy: false)
+        turns.started("d", agentBusy: false)
+        turns.transcribed("c", "")
+        XCTAssertNil(turns.takeReady())
+        turns.failed("d")
+        XCTAssertEqual(turns.takeReady()?.heardWords, true)
+        turns.started("e", agentBusy: false)
+        turns.timedOut()
+        XCTAssertEqual(turns.takeReady()?.heardWords, true)
+    }
+
+    func testNameNobodySaidIsNotSaved() {
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Nova it is!", agentName: "Nova")))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        e.handle(.voiceTranscript(role: .assistant, text: "Hey, it's Nova! What should I call you?"))
+        // Background noise, nothing transcribed, and the voice model "heard" a name anyway.
+        let fx = e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Alex"}"#, callID: "c1"))
+        XCTAssertNil(e.state.profile.userName)
+        let output = fx.compactMap { if case .voiceToolResult(_, let o) = $0 { return o } else { return nil } }.first ?? ""
+        XCTAssertTrue(output.contains("not_heard"), output)
+        XCTAssertTrue(fx.contains { if case .voiceSystemNote(let t) = $0 { return t.contains("Alex") } else { return false } }, "the agent corrects itself")
+        // Then they really answer.
+        e.handle(.voiceTranscript(role: .user, text: "Oh sorry, it's Ahmed."))
+        e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Ahmed"}"#, callID: "c2"))
+        XCTAssertEqual(e.state.profile.userName, "Ahmed")
+    }
+
+    func testRealNameIsNeverStuckWhenSpeechToTextMangledIt() {
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Milo")))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        // The full transcript hasn't landed yet, but live captions have it.
+        e.handle(.voiceCaption("Hi, I'm Karim"))
+        e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Karim"}"#, callID: "c1"))
+        XCTAssertEqual(e.state.profile.userName, "Karim")
+        // Speech-to-text keeps mangling a name the voice model hears fine: asked once, then trusted.
+        let f = engine()
+        f.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Milo")))
+        f.handle(.callAnswered)
+        f.handle(.callConnected)
+        f.handle(.voiceTranscript(role: .user, text: "I'm on."))
+        f.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Siobhan"}"#, callID: "c1"))
+        XCTAssertNil(f.state.profile.userName)
+        f.handle(.voiceTranscript(role: .user, text: "I said it's Shivawn."))
+        f.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Siobhan"}"#, callID: "c2"))
+        XCTAssertEqual(f.state.profile.userName, "Siobhan")
+        // How loose "heard" is.
+        XCTAssertTrue(Validation.nameWasHeard("Ahmed", in: ["it's A-H-M-E-D"]))
+        XCTAssertTrue(Validation.nameWasHeard("Chloé", in: ["je suis chloe"]))
+        XCTAssertTrue(Validation.nameWasHeard("Aymane", in: ["I'm Ayman"]))
+        XCTAssertTrue(Validation.nameWasHeard("Siobhan", in: ["call me Shivon"]))
+        XCTAssertFalse(Validation.nameWasHeard("Alex", in: ["Let's call you Nova", "What can you do?"]))
     }
 }

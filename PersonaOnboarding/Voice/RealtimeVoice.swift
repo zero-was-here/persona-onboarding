@@ -83,6 +83,14 @@ final class RealtimeVoice {
     @ObservationIgnored private var awaitingUserTranscript = false
     /// The user already hung up; we're only waiting for their last words' transcript. Stay silent.
     @ObservationIgnored private var endingByUser = false
+    /// Turn gate (see TurnGate): the server doesn't answer caller turns by itself. We ask for a reply once
+    /// speech-to-text confirms real words, so the agent never answers background noise with made-up words.
+    @ObservationIgnored private var gate = TurnGate()
+    @ObservationIgnored private var turns = PendingTurns()
+    @ObservationIgnored private var turnTimeout: Task<Void, Never>?
+    @ObservationIgnored private var activityBeforeTurn = Date()
+    @ObservationIgnored private var nudgedBeforeTurn = false
+    @ObservationIgnored private var noiseTurns = 0
     private(set) var simulatingCaller = false
     /// Autopilot mode: the real microphone is replaced by silence plus the caller's synthetic speech,
     /// so room noise around the Mac/iPhone can't hold the turn open.
@@ -112,6 +120,10 @@ final class RealtimeVoice {
         goodbyeFinished = false
         respondAfterCurrent = false
         nudgedForSilence = false
+        gate = TurnGate()
+        turns.reset()
+        turnTimeout?.cancel()
+        noiseTurns = 0
         assistantCaption = ""
         userCaption = ""
         lastError = nil
@@ -186,13 +198,14 @@ final class RealtimeVoice {
     /// Input side of the session. The transcription prompt gives the caption model context (names!).
     /// Noise reduction runs before turn detection: far-field on speakerphone (the phone is at arm's length,
     /// hearing the room), near-field on the earpiece or a headset. Fewer false "the user spoke" triggers.
+    /// `create_response: false`: the app decides when to answer a turn (see `decideTurnIfReady`).
     private func inputAudioConfig(transcriptionPrompt: String) -> [String: Any] {
         var transcription: [String: Any] = ["model": transcriptionModel]
         if !transcriptionPrompt.isEmpty { transcription["prompt"] = transcriptionPrompt }
         let farField = speakerOn && !audio.hasHeadset
         return [
             "format": ["type": "audio/pcm", "rate": 24_000],
-            "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": true, "interrupt_response": true],
+            "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": false, "interrupt_response": true],
             "transcription": transcription,
             "noise_reduction": ["type": farField ? "far_field" : "near_field"],
         ]
@@ -223,7 +236,8 @@ final class RealtimeVoice {
         guard status == .live else { return }
         send(["type": "conversation.item.create", "item": ["type": "message", "role": "system", "content": [["type": "input_text", "text": text]]]])
         if respond {
-            if responseActive { respondAfterCurrent = true } else { send(["type": "response.create"]) }
+            // Mid-sentence, or the caller is mid-turn: react right after that instead of talking over it.
+            if responseActive || userSpeaking || !turns.isEmpty { respondAfterCurrent = true } else { send(["type": "response.create"]) }
         }
         lastActivity = Date()
     }
@@ -414,7 +428,7 @@ final class RealtimeVoice {
         if status == .live || status == .ending { audio.checkHealth() }
         let playing = audio.isPlaying
         assistantSpeaking = playing
-        diagnostics = "\(audio.info) · \(audio.route) · out peak \(String(format: "%.2f", audio.outputPeak)) · mic peak \(String(format: "%.2f", audio.inputPeak)) · rebuilds \(audio.rebuilds) · echo held \(audio.guardedChunks) · barge-ins \(audio.bargeIns) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
+        diagnostics = "\(audio.info) · \(audio.route) · out peak \(String(format: "%.2f", audio.outputPeak)) · mic peak \(String(format: "%.2f", audio.inputPeak)) · rebuilds \(audio.rebuilds) · echo held \(audio.guardedChunks) · barge-ins \(audio.bargeIns) · noise turns \(noiseTurns) · mic chunks \(audio.micChunks) · audio chunks \(audio.outChunks) · events \(eventsReceived)"
         if playing || userSpeaking || responseActive { lastActivity = Date() }
 
         if let reason = pendingHangUp {
@@ -446,6 +460,55 @@ final class RealtimeVoice {
         }
     }
 
+    // MARK: Turn gate
+
+    /// Speech-to-text normally finishes a few hundred ms after the caller stops. If it's slower than this,
+    /// answer anyway (trusting the voice model) rather than leave the caller waiting.
+    private func armTurnTimeout() {
+        turnTimeout?.cancel()
+        let gen = generation
+        turnTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1_500))
+            guard let self, self.generation == gen, !Task.isCancelled else { return }
+            self.turns.timedOut()
+            self.decideTurnIfReady()
+        }
+    }
+
+    /// Once the caller has stopped and speech-to-text has had its say, answer, say "didn't catch that",
+    /// pick up where the agent was cut off, or ignore the noise (see TurnGate).
+    private func decideTurnIfReady() {
+        guard !userSpeaking, let ready = turns.takeReady() else { return }
+        turnTimeout?.cancel()
+        guard status == .live, !endingByUser, pendingHangUp == nil else { return }
+        let decision = gate.decide(heardWords: ready.heardWords, interruptedAgent: ready.cutAgentOff)
+        print("[voice] turn gate: words \(ready.heardWords), cut agent off \(ready.cutAgentOff) → \(decision)")
+        switch decision {
+        case .respond:
+            requestResponse()
+        case .sayUnclear, .resume:
+            noiseTurns += 1
+            if let note = BrainPrompts.noiseNote(decision) {
+                send(["type": "conversation.item.create", "item": ["type": "message", "role": "system", "content": [["type": "input_text", "text": note]]]])
+            }
+            requestResponse(allowTools: false)
+        case .ignore:
+            // Steady noise, not the caller: it doesn't count as them talking for the silence check-ins.
+            noiseTurns += 1
+            lastActivity = activityBeforeTurn
+            nudgedForSilence = nudgedBeforeTurn
+            if respondAfterCurrent && !responseActive { requestResponse() }   // a follow-up was waiting on this turn
+        }
+    }
+
+    private func requestResponse(allowTools: Bool = true) {
+        if responseActive { respondAfterCurrent = true; return }
+        respondAfterCurrent = false
+        var event: [String: Any] = ["type": "response.create"]
+        if !allowTools { event["response"] = ["tool_choice": "none"] }
+        send(event)
+    }
+
     private func endWithGoodbye(_ reason: CallEndReason, goodbye: String) {
         pendingHangUp = reason
         plannedEnd = reason
@@ -475,6 +538,9 @@ final class RealtimeVoice {
         if let o = interruptionObserver { NotificationCenter.default.removeObserver(o); interruptionObserver = nil }
         watchdog?.cancel()
         watchdog = nil
+        turnTimeout?.cancel()
+        turnTimeout = nil
+        turns.reset()
         audio.onMicChunk = nil
         audio.onLevels = nil
         audio.stop()
@@ -534,6 +600,12 @@ final class RealtimeVoice {
             if status == .connecting { beginAudio() }
 
         case "input_audio_buffer.speech_started":
+            let item = obj["item_id"] as? String ?? UUID().uuidString
+            if turns.started(item, agentBusy: audio.isPlaying || responseActive) {
+                activityBeforeTurn = lastActivity
+                nudgedBeforeTurn = nudgedForSilence
+            }
+            turnTimeout?.cancel()
             userSpeaking = true
             awaitingUserTranscript = true
             userCaption = ""
@@ -552,19 +624,40 @@ final class RealtimeVoice {
             userSpeaking = false
             lastActivity = Date()
 
+        case "input_audio_buffer.committed":
+            if let item = obj["item_id"] as? String { turns.committed(item) }
+            armTurnTimeout()
+            decideTurnIfReady()
+
         case "conversation.item.input_audio_transcription.delta":
-            if let d = obj["delta"] as? String { userCaption += d }
+            if let d = obj["delta"] as? String {
+                userCaption += d
+                if let item = obj["item_id"] as? String { turns.partialTranscript(item, d) }
+            }
 
         case "conversation.item.input_audio_transcription.completed":
             let t = (obj["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty {
+            let words = TurnGate.hasWords(t)
+            if words {
                 userCaption = t
                 onEvent?(.transcript(role: .user, text: t))
+            } else {
+                userCaption = ""
             }
             awaitingUserTranscript = false
+            print("[voice] caller turn transcribed: \(t.count) chars, words: \(words)")
+            if let item = obj["item_id"] as? String {
+                turns.transcribed(item, t)
+                // No words: take the noise out of the conversation so the model can't "remember" hearing something.
+                if !words { send(["type": "conversation.item.delete", "item_id": item]) }
+            }
+            decideTurnIfReady()
 
         case "conversation.item.input_audio_transcription.failed":
+            print("[voice] caller turn transcription failed: \((obj["error"] as? [String: Any])?["message"] ?? "?")")
             awaitingUserTranscript = false
+            if let item = obj["item_id"] as? String { turns.failed(item) }
+            decideTurnIfReady()
 
         case "response.created":
             if goodbyeRequested && !goodbyeStarted { goodbyeStarted = true }
@@ -622,9 +715,14 @@ final class RealtimeVoice {
                 }
             } else if status == .live && (respondAfterCurrent || (responseHadToolCall && !responseTranscript.contains("?"))) {
                 // Tools ran and the agent didn't ask anything yet, or an app event landed mid-sentence:
-                // let it continue with what it now knows.
-                respondAfterCurrent = false
-                send(["type": "response.create"])
+                // let it continue with what it now knows. If the caller is mid-turn, the turn gate answers
+                // once speech-to-text is in (never on top of noise).
+                if userSpeaking || !turns.isEmpty {
+                    respondAfterCurrent = true
+                } else {
+                    respondAfterCurrent = false
+                    send(["type": "response.create"])
+                }
             }
 
         case "error":
