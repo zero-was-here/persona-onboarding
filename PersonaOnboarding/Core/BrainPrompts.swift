@@ -33,7 +33,7 @@ public enum BrainPrompts {
     PRIVACY FACTS (answer privacy questions in 1–2 short sentences using only these):
     - Connecting Gmail lets you read the emails in their inbox (all of them, so you can sort everything) and draft replies they approve before anything is sent. You never send on your own.
     - Their email data is stored encrypted, used only to help them, never sold or shared, and deleted when they disconnect or ask.
-    - This build is a prototype: the Gmail sign-in is simulated, so nothing is actually read yet. Say this only if they ask whether it's real or what happens right now.
+    - This build is a prototype: Google sign-in is real, but for now it only asks to see their Gmail label names (to confirm the connection). Reading and sorting messages comes once Google's full security review is done. Say this only if they ask whether it's real or what you can see right now.
     """
 
     // MARK: - Text brain
@@ -156,6 +156,19 @@ public enum BrainPrompts {
         Example (adapt it, don't copy it word for word): "\(example)"
         Use their name if you know it, mention one concrete thing you'll do for them, and say bye. Never mention sessions, setup, systems, or "the call ending". Don't ask anything. Don't call tools.
         """
+    }
+
+    /// Context for the speech-to-text model behind the live captions (it mishears names without it).
+    public static func transcriptionPrompt(_ s: OnboardingState) -> String {
+        var p = "A person is on a phone call with their new AI assistant"
+        if let agent = s.profile.agentName { p += " named \(agent)" }
+        p += ". They say what to call them, what they'd like help with, and whether to connect Gmail."
+        if let user = s.profile.userName {
+            p += " Their name is \(user)."
+        } else {
+            p += " Names may be Arabic, French, Spanish or English, for example Ayman, Aymane, Youssef, Yassine, Omar, Sara, Chloé, Leo."
+        }
+        return p
     }
 
     public static func voiceInstructions(_ s: OnboardingState) -> String {

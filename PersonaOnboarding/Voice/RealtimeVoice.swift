@@ -86,7 +86,7 @@ final class RealtimeVoice {
 
     // MARK: - Lifecycle
 
-    func start(apiKey: String, instructions: String, tools: [[String: Any]]) {
+    func start(apiKey: String, instructions: String, tools: [[String: Any]], transcriptionPrompt: String = "") {
         guard status == .idle else { return }
         self.apiKey = apiKey
         generation += 1
@@ -122,12 +122,7 @@ final class RealtimeVoice {
                 "instructions": instructions,
                 "output_modalities": ["audio"],
                 "audio": [
-                    "input": [
-                        "format": ["type": "audio/pcm", "rate": 24_000],
-                        "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": true, "interrupt_response": true],
-                        "transcription": ["model": transcriptionModel],
-                        "noise_reduction": ["type": "near_field"],
-                    ],
+                    "input": inputAudioConfig(transcriptionPrompt: transcriptionPrompt),
                     "output": [
                         "format": ["type": "audio/pcm", "rate": 24_000],
                         "voice": voice,
@@ -158,9 +153,29 @@ final class RealtimeVoice {
         finish(.dropped, error: "Simulated drop")
     }
 
-    func updateInstructions(_ instructions: String) {
+    /// Input side of the session. The transcription prompt gives the caption model context (names!).
+    private func inputAudioConfig(transcriptionPrompt: String) -> [String: Any] {
+        var transcription: [String: Any] = ["model": transcriptionModel]
+        if !transcriptionPrompt.isEmpty { transcription["prompt"] = transcriptionPrompt }
+        return [
+            "format": ["type": "audio/pcm", "rate": 24_000],
+            "turn_detection": ["type": "semantic_vad", "eagerness": "auto", "create_response": true, "interrupt_response": true],
+            "transcription": transcription,
+            "noise_reduction": ["type": "near_field"],
+        ]
+    }
+
+    func updateInstructions(_ instructions: String, transcriptionPrompt: String? = nil) {
         guard status == .live || status == .connecting else { return }
-        send(["type": "session.update", "session": ["type": "realtime", "instructions": instructions]])
+        var session: [String: Any] = ["type": "realtime", "instructions": instructions]
+        if let transcriptionPrompt { session["audio"] = ["input": inputAudioConfig(transcriptionPrompt: transcriptionPrompt)] }
+        send(["type": "session.update", "session": session])
+    }
+
+    /// Once the user's name is saved, fix the live caption if speech-to-text misheard it.
+    func correctUserCaption(name: String?) {
+        guard let name, let fixed = Validation.replacingSimilarName(in: userCaption, with: name) else { return }
+        userCaption = fixed
     }
 
     func sendToolResult(callID: String, output: String) {

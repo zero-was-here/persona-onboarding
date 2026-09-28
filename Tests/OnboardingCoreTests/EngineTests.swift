@@ -227,4 +227,30 @@ final class EngineTests: XCTestCase {
         e.handle(.voiceTranscript(role: .user, text: "Actually I'd rather speak English, is that okay?"))
         XCTAssertNil(e.state.spokenLanguage)
     }
+    func testMisheardNameIsFixedInCaptionOnceSaved() {
+        XCTAssertEqual(Validation.replacingSimilarName(in: "You should call me. Amen", with: "Ayman"), "You should call me. Ayman")
+        XCTAssertEqual(Validation.replacingSimilarName(in: "I'm Eimon, hi", with: "Ayman"), "I'm Ayman, hi")
+        XCTAssertNil(Validation.replacingSimilarName(in: "I need help with my calendar", with: "Ayman"))
+        XCTAssertNil(Validation.replacingSimilarName(in: "Call me Ayman", with: "Ayman"), "already right")
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Milo")))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        e.handle(.voiceTranscript(role: .user, text: "You should call me. Amen"))
+        e.handle(.voiceToolCall(name: "save_user_name", arguments: #"{"name":"Ayman"}"#, callID: "c1"))
+        XCTAssertEqual(e.state.profile.userName, "Ayman")
+        XCTAssertEqual(e.state.transcript.last(where: { $0.role == .user })?.text, "You should call me. Ayman")
+        XCTAssertTrue(BrainPrompts.transcriptionPrompt(e.state).contains("Their name is Ayman"))
+    }
+
+    func testRealGmailConnectionTellsTheAgentWhatItSaw() {
+        let e = engine()
+        e.handle(.textBrainReplied(TextTurn(reply: "Love it", agentName: "Milo")))
+        e.handle(.callAnswered)
+        e.handle(.callConnected)
+        let fx = e.handle(.gmailConnected(GmailConnection(email: "ayman@gmail.com", isSimulated: false, labelCount: 23, sampleLabels: ["Receipts", "Travel"])))
+        let note = fx.compactMap { if case .voiceSystemNote(let t) = $0 { return t } else { return nil } }.first ?? ""
+        XCTAssertTrue(note.contains("23 labels") && note.contains("Receipts"), note)
+        XCTAssertEqual(e.state.profile.gmail?.isSimulated, false)
+    }
 }

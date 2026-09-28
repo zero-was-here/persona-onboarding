@@ -82,12 +82,13 @@ Latest results:
 
 - **Native iOS over web.** A real phone-call feel (full-screen incoming call, haptic ring, echo-cancelled audio) matters for this product. The trade-off is distribution through TestFlight instead of a URL.
 - **Realtime over WebSocket, not WebRTC.** No third-party WebRTC binary, full control of the audio graph, and simpler debugging.
-- **Simulated Google sign-in.** The Gmail step goes through a realistic consent sheet but doesn't hit Google. Production would use Google Sign-In with incremental `gmail.readonly` / `gmail.compose` scopes.
+- **Real Google sign-in, labels only.** The Gmail step is a real Google OAuth sign-in (authorization code + PKCE, no SDK) asking for basic identity plus `gmail.labels`. Google classes that scope as non-sensitive, so any account can connect without app verification, and the app reads the label list to prove the connection is live (the agent can mention one of your labels). Reading messages (`gmail.readonly`) is a restricted scope that needs Google's security assessment, which takes weeks, so it's the first production step. Builds without a Google client ID fall back to a clearly labeled demo connection.
+- **Captions show the agent, not you.** The call screen captions the agent's exact words. The user's speech isn't echoed back live, because speech-to-text can mishear any word (names especially); the agent's reply already shows what it understood. The call transcript still lands in the chat, with the user's name corrected once it's saved.
 - **API key in the build (gitignored `Secrets.json`).** Fine for a trial with a capped key. Production would mint short-lived realtime tokens from a small backend.
 
 ## What's next
 
-- Real Google OAuth plus the first actual task (an inbox triage preview) right after graduation.
+- Google verification for `gmail.readonly`, then the first real task (an inbox triage preview) right after graduation.
 - CallKit so the call rings like a real phone call, even from the lock screen.
 - A server-side token service, per-user rate limits, and analytics on drop-off points.
 - Evaluate `gpt-live-1` (full duplex) for the call and keep `gpt-realtime-2.1` for tool-heavy turns.

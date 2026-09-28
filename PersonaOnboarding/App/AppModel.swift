@@ -215,6 +215,22 @@ final class AppModel {
         dispatch(.gmailConnected(GmailConnection(email: email, isSimulated: true)))
     }
 
+    /// Real Google sign-in: the label list from the Gmail API proves the connection is live.
+    func connectGmail(account: GoogleAuth.Account) {
+        showGmailSheet = false
+        dispatch(.gmailConnected(GmailConnection(email: account.email, isSimulated: false,
+                                                 labelCount: account.labelCount,
+                                                 sampleLabels: Array(account.userLabels.prefix(5)))))
+    }
+
+    /// Opening the Gmail screen mid-call: the agent should wait quietly, and silence isn't a hang-up.
+    func gmailSheetChanged(open: Bool) {
+        voice.suspendSilenceCheck = open || showTester
+        if open, voice.status == .live {
+            voice.injectSystem("The user is on the Google sign-in screen now. Stay quiet and wait until they finish or speak to you.", respond: false)
+        }
+    }
+
     func cancelGmail() {
         showGmailSheet = false
         dispatch(.gmailCancelled)
@@ -289,7 +305,8 @@ final class AppModel {
                 guard !self.apiKey.isEmpty else { self.dispatch(.callFailed("missing API key")); return }
                 self.voice.start(apiKey: self.apiKey,
                                  instructions: BrainPrompts.voiceInstructions(self.engine.state),
-                                 tools: BrainPrompts.voiceTools)
+                                 tools: BrainPrompts.voiceTools,
+                                 transcriptionPrompt: BrainPrompts.transcriptionPrompt(self.engine.state))
             }
 
         case .disconnectVoice:
@@ -305,7 +322,8 @@ final class AppModel {
             voice.injectSystem(text)
 
         case .refreshVoiceInstructions:
-            voice.updateInstructions(BrainPrompts.voiceInstructions(engine.state))
+            voice.updateInstructions(BrainPrompts.voiceInstructions(engine.state),
+                                     transcriptionPrompt: BrainPrompts.transcriptionPrompt(engine.state))
 
         case .showGmailConnect:
             Haptics.soft()
@@ -331,6 +349,7 @@ final class AppModel {
             dispatch(.voiceTranscript(role: role, text: text))
         case .toolCall(let name, let arguments, let callID):
             dispatch(.voiceToolCall(name: name, arguments: arguments, callID: callID))
+            if name == "save_user_name" { voice.correctUserCaption(name: state.profile.userName) }
         case .ended(let reason):
             SoundFX.shared.play("call_end")
             dispatch(.callEnded(reason))
@@ -381,6 +400,15 @@ final class AppModel {
 
 enum AppSecrets {
     static let overrideKey = "openai.key.override"
+
+    /// iOS OAuth client for "Sign in with Google" (not a secret). Secrets.json can override it.
+    static var googleClientID: String {
+        if let url = Bundle.main.url(forResource: "Secrets", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           let id = obj["GOOGLE_IOS_CLIENT_ID"], !id.isEmpty { return id }
+        return GoogleAuth.defaultClientID
+    }
 
     static var openAIKey: String {
         if let k = UserDefaults.standard.string(forKey: overrideKey), !k.isEmpty { return k }

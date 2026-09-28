@@ -162,11 +162,16 @@ public final class OnboardingEngine {
             log("gmail connected: \(connection.email)")
             state.transcript.append(Message(role: .event, text: "Gmail connected · \(connection.email)", channel: currentChannel, date: now()))
             var effects: [OnboardingEffect] = [.haptic(.success)]
+            var proof = ""
+            if let count = connection.labelCount {
+                let sample = (connection.sampleLabels ?? []).prefix(3).joined(separator: ", ")
+                proof = " It's a real Google connection: their mailbox has \(count) labels" + (sample.isEmpty ? "" : " (their own include \(sample))") + ". You may mention one naturally so they can tell it's really connected."
+            }
             if state.call.status == .active || state.call.status == .connecting {
                 effects.append(.refreshVoiceInstructions)
-                effects.append(.voiceSystemNote("The user just connected their Gmail (\(connection.email)). Acknowledge it in a few words, in the user's language, and continue. \(Policy.voiceNextStep(state))\(languageReminder)"))
+                effects.append(.voiceSystemNote("The user just connected their Gmail (\(connection.email)).\(proof) Acknowledge it in a few words, in the user's language, and continue. \(Policy.voiceNextStep(state))\(languageReminder)"))
             } else if state.phase != .graduated {
-                effects.append(.runTextBrain(note: "The user just connected their Gmail (\(connection.email)). Acknowledge it briefly and continue."))
+                effects.append(.runTextBrain(note: "The user just connected their Gmail (\(connection.email)).\(proof) Acknowledge it briefly and continue."))
             }
             return effects
 
@@ -291,6 +296,11 @@ public final class OnboardingEngine {
                 state.profile.userName = n
                 state.profile.declined.remove(.userName)
                 result["saved"] = ["user_name": n]
+                // The voice model heard the name right; fix the caption if speech-to-text mangled it.
+                if let i = state.transcript.lastIndex(where: { $0.role == .user && $0.channel == .voice }),
+                   let fixed = Validation.replacingSimilarName(in: state.transcript[i].text, with: n) {
+                    state.transcript[i].text = fixed
+                }
             } else {
                 result = ["ok": false, "error": "That didn't sound like a name. Ask again lightly, or move on."]
             }

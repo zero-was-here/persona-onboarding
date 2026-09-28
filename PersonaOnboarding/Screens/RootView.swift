@@ -40,6 +40,7 @@ struct RootView: View {
                 agentName: model.agentName,
                 helpNeed: model.state.profile.helpNeed,
                 onConnect: { model.connectGmail($0) },
+                onConnectAccount: { model.connectGmail(account: $0) },
                 onCancel: { model.cancelGmail() }
             )
             .presentationDetents([.large])
@@ -52,7 +53,8 @@ struct RootView: View {
                 .presentationCornerRadius(34)
         }
         .preferredColorScheme(.dark)
-        .onChange(of: model.showTester) { _, open in model.voice.suspendSilenceCheck = open }
+        .onChange(of: model.showTester) { _, open in model.voice.suspendSilenceCheck = open || model.showGmailSheet }
+        .onChange(of: model.showGmailSheet) { _, open in model.gmailSheetChanged(open: open) }
     }
 }
 

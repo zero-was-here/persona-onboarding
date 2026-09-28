@@ -107,7 +107,7 @@ struct CallView: View {
                 }
                 Spacer(minLength: 12)
 
-                Captions(assistant: voice.assistantCaption, user: voice.userCaption, userSpeaking: voice.userSpeaking)
+                Captions(assistant: voice.assistantCaption, userSpeaking: voice.userSpeaking)
                     .frame(height: 96)
                     .padding(.horizontal, 28)
 
@@ -236,30 +236,21 @@ struct ProgressConstellation: View {
     }
 }
 
+/// The agent's words (its exact output, so always right). The user's own speech isn't echoed back:
+/// speech-to-text can mishear any word, and the agent's reply already shows what it understood.
 struct Captions: View {
     let assistant: String
-    let user: String
     let userSpeaking: Bool
 
     var body: some View {
-        VStack(spacing: 10) {
-            Text(tail(assistant, 120))
-                .font(Typo.sans(19, .medium))
-                .foregroundStyle(Theme.ink.opacity(userSpeaking ? 0.45 : 0.95))
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-                .frame(maxWidth: .infinity)
-                .contentTransition(.opacity)
-            if !user.isEmpty {
-                Text(tail(user, 80))
-                    .font(Typo.sans(14))
-                    .foregroundStyle(Theme.aqua.opacity(userSpeaking ? 0.95 : 0.55))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .transition(.opacity)
-            }
-        }
-        .animation(Motion.snappy, value: userSpeaking)
+        Text(tail(assistant, 120))
+            .font(Typo.sans(19, .medium))
+            .foregroundStyle(Theme.ink.opacity(userSpeaking ? 0.45 : 0.95))
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .frame(maxWidth: .infinity)
+            .contentTransition(.opacity)
+            .animation(Motion.snappy, value: userSpeaking)
     }
 
     private func tail(_ s: String, _ n: Int) -> String {

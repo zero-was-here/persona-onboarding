@@ -50,6 +50,48 @@ public enum Validation {
         return s.prefix(1).uppercased() + s.dropFirst()
     }
 
+    /// Speech-to-text often mangles names ("Ayman" → "Amen") even when the voice model heard them right.
+    /// Once the name is known, swap the closest-sounding word in a caption for it. Returns nil if nothing fits.
+    public static func replacingSimilarName(in text: String, with name: String) -> String? {
+        let target = name.lowercased()
+        guard target.count >= 3, !text.lowercased().contains(target) else { return nil }
+        let cues: Set<String> = ["me", "i'm", "im", "is", "name", "call", "it's", "c'est", "appelle", "suis", "llamo", "soy", "sono"]
+        let tokens = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        var best: (index: Int, distance: Int)?
+        for (i, raw) in tokens.enumerated() {
+            let word = raw.trimmingCharacters(in: .punctuationCharacters).lowercased()
+            guard word.count >= 3, word.allSatisfy(\.isLetter) else { continue }
+            let d = levenshtein(word, target)
+            let previous = i > 0 ? tokens[i - 1].trimmingCharacters(in: .punctuationCharacters).lowercased() : ""
+            // Right after "call me" / "I'm" / "my name is", the next word is almost surely the name.
+            let cued = cues.contains(previous)
+            let limit = (word.first == target.first ? 2 : 1) + (cued ? 1 : 0) + (cued && abs(word.count - target.count) <= 1 ? 1 : 0)
+            if d <= limit, d < (best?.distance ?? .max) { best = (i, d) }
+        }
+        guard let hit = best else { return nil }
+        var out = tokens
+        let raw = tokens[hit.index]
+        let leading = raw.prefix(while: { $0.isPunctuation })
+        let trailing = String(raw.reversed().prefix(while: { $0.isPunctuation }).reversed())
+        out[hit.index] = leading + name + trailing
+        return out.joined(separator: " ")
+    }
+
+    static func levenshtein(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var prev = Array(0...b.count)
+        for i in 1...a.count {
+            var cur = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+            }
+            prev = cur
+        }
+        return prev[b.count]
+    }
+
     public static func isValidEmail(_ raw: String) -> Bool {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"

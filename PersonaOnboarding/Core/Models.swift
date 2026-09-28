@@ -27,10 +27,15 @@ public struct GmailConnection: Codable, Equatable, Sendable {
     public var email: String
     public var connectedAt: Date
     public var isSimulated: Bool
-    public init(email: String, connectedAt: Date = Date(), isSimulated: Bool) {
+    /// From the live Gmail API after a real Google sign-in (proves the connection works).
+    public var labelCount: Int?
+    public var sampleLabels: [String]?
+    public init(email: String, connectedAt: Date = Date(), isSimulated: Bool, labelCount: Int? = nil, sampleLabels: [String]? = nil) {
         self.email = email
         self.connectedAt = connectedAt
         self.isSimulated = isSimulated
+        self.labelCount = labelCount
+        self.sampleLabels = sampleLabels
     }
 }
 
