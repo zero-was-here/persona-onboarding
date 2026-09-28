@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AVFoundation
 import Observation
 
@@ -110,7 +111,7 @@ final class AppModel {
     }
 
     struct Suggestion: Identifiable, Hashable {
-        enum Action: Hashable { case say(String), call, connectGmail, skip }
+        enum Action: Hashable { case say(String), call, connectGmail, skip, openSettings }
         let title: String
         var icon: String? = nil
         let action: Action
@@ -126,6 +127,9 @@ final class AppModel {
                 + [Suggestion(title: "Surprise me", icon: "sparkles", action: .say("You pick a name for yourself"))]
         case .textFollowUp:
             var s: [Suggestion] = []
+            if state.call.lastEnd == .micDenied && AVAudioApplication.shared.recordPermission != .granted {
+                s.append(Suggestion(title: "Turn on microphone", icon: "mic", action: .openSettings))
+            }
             if p.gmail == nil && state.gmailCardVisible {
                 s.append(Suggestion(title: "Connect Gmail", icon: "envelope", action: .connectGmail))
                 s.append(Suggestion(title: "Maybe later", action: .say("Maybe later for Gmail")))
@@ -161,6 +165,8 @@ final class AppModel {
         case .call: requestCall()
         case .connectGmail: showGmailSheet = true
         case .skip: dispatch(.skipRequested)
+        case .openSettings:
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         }
     }
 
